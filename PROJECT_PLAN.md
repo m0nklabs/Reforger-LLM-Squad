@@ -1,5 +1,11 @@
 # PROJECT PLAN: Reforger LLM Squad Control
 
+> ⚠️ **2026-08-07 — GECORRIGEERD.** Dit plan stamt van vóór de launch-fix en bevatte foute
+> `-mod`-instructies en een foute bridge-poort. Hieronder aangepast, maar bij ELKE
+> tegenstrijdigheid gelden **AGENTS.md** en **MOD_SETUP.md** als waarheid.
+> Kort: `-mod` bestaat NIET in Reforger → gebruik `launch_reforger.bat`
+> (`-addonsDir` + `-addons <GUID>`, working dir = game-dir). Bridge-poort = **5001**.
+
 ## Document Status
 - **Created**: 2026-08-06
 - **Author**: Goose AI Agent
@@ -16,7 +22,7 @@ Bouw een LLM-powered squad control systeem voor Arma Reforger dat de operator in
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        OPERATOR (you)                                │
-│  Start game met -mod parameter  |  Start python_bridge/main.py      │
+│  Start game via launch_reforger.bat   |  Start python_bridge/main.py      │
 └──────────────┬──────────────────────────────┬───────────────────────┘
                │                              │
                ▼                              ▼
@@ -115,12 +121,12 @@ Bouw een LLM-powered squad control systeem voor Arma Reforger dat de operator in
 
 ### 3.1 Hard Constraints
 1. **Geen Workbench**: Enforce Script `.c` files worden als plain text geschreven. De game compileert scripts bij runtime.
-2. **Geen Steam Workshop**: Mods worden lokaal geladen via `-mod` launch parameter.
+2. **Geen Steam Workshop**: Mods worden lokaal geladen via `-addonsDir <pad>` + `-addons <GUID>` (gecorrigeerd 2026-08-07: `-mod` bestaat NIET — zie AGENTS.md).
 3. **Geen BattlEye server**: Single-player of local hosted. Anti-cheat is niet actief in single-player.
 4. **Enforce Script is geen C#**: Het lijkt erop, maar heeft beperkingen. Classes moeten in specifieke mappen, `modded class` syntax voor overrides.
 
 ### 3.2 Assumptions
-1. De operator kan de game starten met custom launch parameters (`-mod`).
+1. De operator kan de game starten via `launch_reforger.bat` (correcte `-addonsDir`/`-addons` + working directory).
 2. De game compileert unpacked `.c` bestanden bij opstarten (standaard Reforger gedrag).
 3. De proxy blijft beschikbaar tijdens de volledige sessie.
 4. Single-player scenario's werken zonder server-infrastructuur.
@@ -165,7 +171,7 @@ Bouw een LLM-powered squad control systeem voor Arma Reforger dat de operator in
         LLMBridge.c
     gproj.conf
   ```
-- [ ] Launch parameter documentatie: `-mod Q:\GAMES\Reforger-LLM-Squad\reforger_mod`
+- [x] Launch parameter documentatie: `-addonsDir` + `-addons` — GEDAAN 2026-08-07, zie MOD_SETUP.md
 
 #### F1.4 — Standalone Test Mode
 - [ ] `python_bridge/test_client.py` — simuleert Reforger game state JSON
@@ -296,7 +302,7 @@ Dingen die de operator **WEL zelf moet doen**:
 
 | Taak | Waarom |
 |---|---|
-| Game starten met `-mod` parameter | Game draait niet in goose's procesruimte |
+| Game starten via `launch_reforger.bat` | Game draait niet in goose's procesruimte |
 | Microfoon toets indrukken (PTT) | Fysieke hardware interactie |
 | In-game scenario laden | Game UI interactie |
 | Proxy/llama-server draaiend houden | Externe machine (`192.168.1.35`) |
@@ -340,7 +346,7 @@ Dingen die de operator **WEL zelf moet doen**:
 
 ### 7.3 Mod Loading Mechanisme
 - Zonder Workbench/Steam wordt de mod geladen als **unpacked addon directory**.
-- Reforger ondersteunt `-mod <path>` parameter voor lokale mods.
+- Reforger kent GEEN `-mod`; lokale mods laden via `-addonsDir <pad>` + `-addons <GUID>` (wiki: Arma_Reforger:Startup_Parameters).
 - De game compileert `.c` bestanden bij runtime vanuit de mod directory.
 - Structuur: mod directory moet `Scripts/Game/` bevatten met de `.c` bestanden, plus een `gproj.conf` of addon metadata.
 
@@ -374,7 +380,7 @@ Dingen die de operator **WEL zelf moet doen**:
 1. **Agent schrijft alle Fase 1 deliverables** (main.py, config.json, requirements.txt, test_client.py, LLMBridge.c, gproj.conf, README.md)
 2. **Agent creëert Python venv** en installeert dependencies
 3. **Agent runt standalone test** (test_client.py) om LLM pipeline te valideren
-4. **Operator start game** met `-mod` parameter
+4. **Operator start game** via `launch_reforger.bat`
 5. **Operator & agent valideren** in-game dat SITREP bridge werkt
 
 ### Volgende Week (Fase 2)

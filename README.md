@@ -17,7 +17,7 @@ LLM-powered squad control system for Arma Reforger.
 3. **Test in-game:**
    - Check nieuwste `My Games\ArmaReforger\logs\<timestamp>\console.log`
    - Zoek naar `ReforgerLLMSquad` (geladen addon) en `[LLMBridge]` regels
-   - Zie `MOD_SETUP.md` voor de gecorrigeerde setup en diagnose
+   - Verifieer: `powershell -NoProfile -File scripts\check_latest_log.ps1` (details: `MOD_SETUP.md`)
 
 ## Architecture
 
