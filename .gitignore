@@ -1,0 +1,15 @@
+# Python
+python_bridge/venv/
+python_bridge/__pycache__/
+python_bridge/bridge.log
+*.pyc
+
+# Bohemia SampleMods referentie (third-party!) - haal zelf op via
+# https://github.com/BohemiaInteractive/Arma-Reforger-Samples
+docs/
+
+# Lokale deprecated rommel (oudere foutieve mod-structuur)
+reforger_mod/_deprecated/
+
+# Temp
+*.tmp

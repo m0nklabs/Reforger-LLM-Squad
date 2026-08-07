@@ -1,0 +1,17 @@
+# Reforger LLM Squad Control - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+openai>=1.10.0
+httpx>=0.25.0
+
+# Voice (Fase 2 - optional, install when needed)
+# faster-whisper>=1.0.0
+# sounddevice>=0.4.6
+
+# Testing (standalone test mode)
+# pytest>=7.4.0
+"requests>=2.31.0"  
