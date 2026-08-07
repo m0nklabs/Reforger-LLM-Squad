@@ -20,17 +20,17 @@ echo [START] Starting Reforger...
 echo [MOD]   %MODS_DIR%\ReforgerLLMSquad
 echo.
 
-REM BELANGRIJK (zie MOD_SETUP.md):
-REM  - /d "%GAME_DIR%"  zet de working directory naar de game folder. Zonder dit
-REM    vindt de engine zijn eigen base game addon (58D0FB3206B6F859) niet via ./addons
-REM    en crasht hij met "Missing Addon" + "Engine Initialization Error".
-REM  - Reforger kent GEEN -mod parameter. Correct: -addonsDir + -addons <GUID>
+REM IMPORTANT (see MOD_SETUP.md):
+REM  - /d "%GAME_DIR%"  sets the working directory to the game folder. Without it
+REM    the engine cannot find its own base game addon (58D0FB3206B6F859) via ./addons
+REM    and crashes with "Missing Addon" + "Engine Initialization Error".
+REM  - Reforger has NO -mod parameter. Correct: -addonsDir + -addons <GUID>
 REM    (wiki: Arma_Reforger:Startup_Parameters)
 start "" /d "%GAME_DIR%" "%GAME_DIR%\ArmaReforgerSteam.exe" -addonsDir "%MODS_DIR%" -addons "%MOD_ID%"
 
 echo [OK] Reforger launched.
 echo.
-echo [CHECK] Na opstarten: nieuwste console.log controleren op
-echo         "ReforgerLLMSquad" en [LLMBridge] regels.
+echo [CHECK] After startup: verify the newest console.log with
+echo         powershell -NoProfile -File scripts\check_latest_log.ps1
 echo.
 pause

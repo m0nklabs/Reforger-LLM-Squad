@@ -21,8 +21,8 @@ echo [INFO] Proxy URL:  http://192.168.1.35:11434/v1
 echo [INFO] Model:      llama3
 echo.
 echo [NEXT] Launch Arma Reforger with:
-echo        ArmaReforgerSteam.exe -mod="Q:\GAMES\Reforger-LLM-Squad\reforger_mod"
-echo        (from Q:\SteamLibrary\steamapps\common\Arma Reforger)
+echo        launch_reforger.bat
+echo        (uses -addonsDir + -addons, NEVER -mod; see MOD_SETUP.md)
 echo.
 echo [TIP]  Open http://127.0.0.1:5001/docs for API docs
 echo [TIP]  Check python_bridge\bridge.log for details

@@ -1,21 +1,21 @@
 // LLMBridge.c - LLM Squad Control Bridge for Arma Reforger
 // Phase 1: REST bridge + AI squad control (no voice)
 //
-// Gecorrigeerd 2026-08-07:
-//  - 'modclass' bestaat niet in Enforce -> 'class'
-//  - Geneste classes verwijderd (Enforce staat geen class-in-class toe) ->
-//    LLMSquadMember / LLMWaypoint nu op file scope (ook hernoemd i.v.m. botsing
-//    met engine class 'Waypoint')
-//  - Verzonnen REST API (new RestContext/SetMethod/Start) vervangen door de echte:
+// Fixed 2026-08-07:
+//  - 'modclass' does not exist in Enforce -> 'class'
+//  - Nested classes removed (Enforce does not allow class-in-class) ->
+//    LLMSquadMember / LLMWaypoint are now file-scope (also renamed to avoid
+//    collision with the engine class 'Waypoint')
+//  - Invented REST API (new RestContext/SetMethod/Start) replaced with the real one:
 //    GetGame().GetRestApi().GetContext(baseUrl) + GET/POST + RestCallback
 //    (wiki: Arma_Reforger:REST_API_Usage)
-//  - 'override' verwijderd: geen base class. Activate()/Update() worden later (F1.2)
-//    vanuit een GameMode-component aangeroepen.
-//  - Ternary-expressies en bool-concat uit stringbuilding gehaald (compile-veilig)
+//  - 'override' removed: no base class. Activate()/Update() will be called (F1.2)
+//    from a GameMode component.
+//  - Ternary expressions and bool-concat removed from string building (compile-safe)
 //
-// TODO (F1.2): LLMBridge instantieren vanuit een component (bijv. modded
-//              SCR_BaseGameMode) en Activate()/Update() aanroepen.
-// TODO:        system_prompt zit nu server-side (python_bridge) - houd prompt daar.
+// TODO (F1.2): instantiate LLMBridge from a component (e.g. modded
+//              SCR_BaseGameMode) and call Activate()/Update().
+// TODO:        system_prompt lives server-side (python_bridge) - keep it there.
 
 //------------------------------------------------------------------------------------------------
 class LLMSquadMember
@@ -51,7 +51,7 @@ class LLMWaypoint
 		m_vPosition = vPos;
 		m_sType = sType;
 		m_bExecuted = false;
-		m_fSpawnTime = 0.0; // wordt gezet door LLMBridge.SpawnWaypoint (m_fTime)
+		m_fSpawnTime = 0.0; // set by LLMBridge.SpawnWaypoint (m_fTime)
 	}
 }
 
@@ -86,7 +86,7 @@ class LLMBridgeRestCallback : RestCallback
 class LLMBridge
 {
 	// ===== Configuration =====
-	string m_sPythonBridgeURL;   // e.g. "http://127.0.0.1:5000"
+	string m_sPythonBridgeURL;   // e.g. "http://127.0.0.1:5001"
 	string m_sLLMModel;          // e.g. "llama3"
 	float m_fLLMTimeout;         // seconds (default 3.0)
 	float m_fSITREPInterval;     // seconds between SITREPs (default 10.0)
@@ -99,13 +99,13 @@ class LLMBridge
 	bool m_bLLMReady;
 	bool m_bPassiveMode;
 
-	// REST (echte Enfusion API)
-	RestContext m_Rest; // non-ref! RestApi bezit de context (destructor is private)
+	// REST (real Enfusion API)
+	RestContext m_Rest; // non-ref! RestApi owns the context (destructor is private)
 
 	// Waypoints managed by LLM
 	ref array<ref LLMWaypoint> m_aWaypoints;
 
-	// Timers (m_fTime loopt op via Update timeslice, seconden)
+	// Timers (m_fTime accumulates via Update timeslice, in seconds)
 	float m_fTime;
 	float m_fLastSITREP;
 	float m_fLastLLMCall;
@@ -115,7 +115,7 @@ class LLMBridge
 	//------------------------------------------------------------------------------------------------
 	void LLMBridge()
 	{
-		m_sPythonBridgeURL = "http://127.0.0.1:5001"; // moet matchen met python_bridge/config.json
+		m_sPythonBridgeURL = "http://127.0.0.1:5001"; // must match python_bridge/config.json
 		m_sLLMModel = "llama3";
 		m_fLLMTimeout = 3.0;
 		m_fSITREPInterval = 10.0;
@@ -157,7 +157,7 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
-	// Wordt later (F1.2) vanuit een component aangeroepen
+	// Called later (F1.2) from a component
 	void Activate()
 	{
 		Print("[LLMBridge] Activated");
@@ -165,7 +165,7 @@ class LLMBridge
 		CheckLLMHealth();
 	}
 
-	// Wordt later (F1.2) vanuit een component OnUpdate aangeroepen
+	// Called later (F1.2) from a component's OnUpdate
 	void Update(float timeslice)
 	{
 		m_fTime += timeslice;
@@ -327,7 +327,7 @@ class LLMBridge
 			if (!wp.m_bExecuted)
 			{
 				float fAge = m_fTime - wp.m_fSpawnTime;
-				if (fAge > 30.0) // 30 seconden
+				if (fAge > 30.0) // 30 seconds
 				{
 					wp.m_bExecuted = true;
 					Print("[LLMBridge] Waypoint " + wp.m_sID + " timed out");
@@ -336,7 +336,7 @@ class LLMBridge
 		}
 	}
 
-	// ===== Radio Callback (LLM-antwoord -> orders) =====
+	// ===== Radio Callback (LLM response -> orders) =====
 	//------------------------------------------------------------------------------------------------
 	void OnRadioCallback(string sMessage)
 	{

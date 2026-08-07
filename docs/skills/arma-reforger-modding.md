@@ -1,25 +1,25 @@
-# Skill: Arma Reforger — mod-structuur & lokaal laden
+# Skill: Arma Reforger — mod structure & local loading
 
-> Hard-won lessen uit de debug-sessie van 2026-08-07 (build 190965), empirisch geverifieerd.
-> Bronnen: BI-wiki `Arma_Reforger:Startup_Parameters`, `:Mod_Project_Setup`, feedback ticket T164922.
+> Hard-won lessons from the 2026-08-07 debug session (build 190965), empirically verified.
+> Sources: BI wiki `Arma_Reforger:Startup_Parameters`, `:Mod_Project_Setup`, feedback ticket T164922.
 
-## 1. Minimale geldige addon
+## 1. Minimal valid addon
 
 ```text
 <addonsDir>/
-  MijnMod/                    <- mapnaam is VRIJ (hoeft geen GUID te zijn)
-    addon.gproj               <- verplicht, GameProject-formaat (GEEN json!)
+  MyMod/                      <- folder name is FREE (does not have to be a GUID)
+    addon.gproj               <- required, GameProject format (NOT json!)
     Scripts/
-      Game/                   <- module "Game" (hercompileert ALLES, zie enforce-script skill)
-        MijnScript.c
+      Game/                   <- module "Game" (recompiles EVERYTHING, see enforce-script skill)
+        MyScript.c
 ```
 
-`addon.gproj` voorbeeld (copy-paste-veilig):
+`addon.gproj` example (copy-paste safe):
 ```
 GameProject {
- ID "MijnMod"
+ ID "MyMod"
  GUID "7E5A1C9B3D8F2406"
- TITLE "Mijn Mod"
+ TITLE "My Mod"
  Dependencies {
   "58D0FB3206B6F859"
  }
@@ -32,46 +32,46 @@ GameProject {
 }
 ```
 
-## 2. GUID-regels
+## 2. GUID rules
 
-- GUID = 16 hex-tekens, UNIEK per addon. Zelf verzinnen is prima (Workbench genereert er normaal één).
-- **Bekende gereserveerde GUIDs — nooit hergebruiken:**
+- GUID = 16 hex characters, UNIQUE per addon. Making one up is fine (Workbench normally generates it).
+- **Known reserved GUIDs — never reuse:**
   | GUID | Addon |
   |---|---|
   | `58D0FB3206B6F859` | **ArmaReforger base game data** (`<game>\addons\data\ArmaReforger.gproj`) |
   | `5614BBCCBB55ED1C` | `core` (`<game>\addons\core\core.gproj`) |
-  | `7E5A1C9B3D8F2406` | onze mod `ReforgerLLMSquad` (deze repo) |
-- Base game dependency declareer je in `Dependencies { "58D0FB3206B6F859" }` — zo doen alle BI SampleMods het.
-- Terugvinden: console.log sectie `Available addons:` toont `gproj: '<pad>' guid: '<GUID>'` per gevonden addon.
+  | `7E5A1C9B3D8F2406` | our mod `ReforgerLLMSquad` (this repo) |
+- Declare the base game dependency via `Dependencies { "58D0FB3206B6F859" }` — all BI SampleMods do this.
+- Finding GUIDs: the console.log section `Available addons:` shows `gproj: '<path>' guid: '<GUID>'` per addon found.
 
-## 3. Lokaal laden ZONDER Workshop (de enige correcte manier)
+## 3. Loading a local mod WITHOUT the Workshop (the only correct way)
 
 ```bat
-start "" /d "<game_dir>" "<game_dir>\ArmaReforgerSteam.exe" -addonsDir "<parent-van-modmap>" -addons "<GUID>"
+start "" /d "<game_dir>" "<game_dir>\ArmaReforgerSteam.exe" -addonsDir "<parent-of-modfolder>" -addons "<GUID>"
 ```
 
-- `-addonsDir <pad>` — extra zoekmap (mods worden ook gezocht in `<exeDir>/addons` en `profile/addons`)
-- `-addons <id1>,<id2>` — kommagescheiden mod IDs (GUID = preferred; Project ID mag ook)
-- ⚠️ **`-mod=` bestaat NIET** (Arma 3/DayZ-syntax). De engine negeert hem compleet — geen warning.
-- ⚠️ **`start "" /d "<game_dir>"` is VERPLICHT-achtig**: zonder `/d` erft het proces de CWD van je
-  shell/bat, en de RELATIEVE addon-dir `./addons` wijst dan fout → de engine vindt z'n eigen
-  base game niet → `Can't find '58D0FB3206B6F859' game addon! Check setup guidelines!`
+- `-addonsDir <path>` — extra search dir (mods are also searched in `<exeDir>/addons` and `profile/addons`)
+- `-addons <id1>,<id2>` — comma-separated mod IDs (GUID = preferred; Project ID also works)
+- ⚠️ **`-mod=` does NOT exist** (Arma 3/DayZ syntax). The engine ignores it completely — no warning.
+- ⚠️ **`start "" /d "<game_dir>"` is effectively REQUIRED**: without `/d` the process inherits your
+  shell's CWD, and the RELATIVE addon dir `./addons` then points the wrong way → the engine cannot
+  find its own base game → `Can't find '58D0FB3206B6F859' game addon! Check setup guidelines!`
   → `Cannot initialize game project settings!` → Engine Initialization Error.
-  Die GUID in de melding is dus de BASE GAME, niet jouw mod. Lees de melding letterlijk.
-- Lokale unpacked mods verschijnen NIET in de in-game mod manager — dat is normaal.
+  That GUID in the message is the BASE GAME, not your mod. Read the message literally.
+- Local unpacked mods do NOT appear in the in-game mod manager — that is normal.
 
 ## 4. Unpacked vs packed
 
 | | Unpacked (dev) | Packed (Workshop) |
 |---|---|---|
-| Vorm | map met `addon.gproj` + losse bestanden | `.pak` bestanden, map per GUID |
-| Scripts | gecompileerd vanaf source bij game-start | meegepacked |
-| `resourceDatabase.rdb` warning | onschuldig (cache wordt aangemaakt) | — |
-| Laden | `-addonsDir` + `-addons`, of Workbench Play | Workshop/in-game manager |
+| Form | folder with `addon.gproj` + loose files | `.pak` files, one folder per GUID |
+| Scripts | compiled from source at game start | shipped inside the pak |
+| `resourceDatabase.rdb` warning | harmless (cache gets created) | — |
+| Loading | `-addonsDir` + `-addons`, or Workbench Play | Workshop / in-game manager |
 
-## 5. Aanbevolen tooling
+## 5. Recommended tooling
 
-- **Arma Reforger Tools** (gratis op Steam) = Workbench: live script-compile met foutmarkeringen,
-  Play-mode, publiceren naar Workshop. Voor serieuze mod-dev is de Workbench-scripteditor een
-  VEEL snellere feedback-loop dan game-launches.
-- Deze repo werkt bewust CLI-first (geen Workbench nodig voor laden/testen).
+- **Arma Reforger Tools** (free on Steam) = Workbench: live script compilation with error markers,
+  Play mode, Workshop publishing. For serious mod dev the Workbench script editor is a MUCH
+  faster feedback loop than game launches.
+- This repo deliberately works CLI-first (no Workbench needed for loading/testing).

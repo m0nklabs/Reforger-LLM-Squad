@@ -1,92 +1,89 @@
-# Mod Setup — Arma Reforger (gecorrigeerd 2026-08-07)
+# Mod Setup — Arma Reforger (corrected 2026-08-07)
 
-## Wat er fout ging
+## What went wrong
 
-De melding `Can't find '58D0FB3206B6F859' game addon!` betekende **niet** dat onze mod
-niet gevonden werd. `58D0FB3206B6F859` is de GUID van de **base game zelf**
-(`<game>\addons\data\ArmaReforger.gproj`). De engine kon zijn eigen game data niet laden
-en crashte daarna met "Cannot initialize game project settings!" / "Engine Initialization Error".
+The message `Can't find '58D0FB3206B6F859' game addon!` did NOT mean our mod was missing.
+`58D0FB3206B6F859` is the GUID of the **base game itself**
+(`<game>\addons\data\ArmaReforger.gproj`). The engine could not load its own game data
+and then crashed with "Cannot initialize game project settings!" / "Engine Initialization Error".
 
-Drie oorzaken:
+Three root causes:
 
-1. **`-mod=` bestaat niet in Arma Reforger** (dat is Arma 3 / DayZ syntax). De engine
-   negeert de parameter compleet. Officiele wiki (Arma_Reforger:Startup_Parameters):
-   - `-addonsDir <pad>` — extra map waarin mods gezocht worden
-   - `-addons <GUID>` — kommagescheiden lijst met mod IDs (GUID uit het .gproj bestand)
-2. **Verkeerde working directory**: `start "" "<exe>"` erfde de CWD van de batchfile,
-   waardoor de relatieve addon-map `./addons` naar `Q:\GAMES\Reforger-LLM-Squad\addons`
-   wees i.p.v. naar de game folder. Fix: `start "" /d "<game_dir>" ...`
-   (bewijs: 7/7 bat-launches faalden zo; launches via Steam werkten gewoon)
-3. **Mod-format klopte niet**: `addon.json` / `gproj.conf` zijn verzonnen formaten — de
-   engine leest ze niet. En de mod gebruikte de base-game GUID als eigen ID (conflict).
-   Een echte addon = map met `addon.gproj` in GameProject-formaat, met een **eigen unieke
-   GUID** en de base game als dependency.
+1. **`-mod=` does not exist in Arma Reforger** (that is Arma 3 / DayZ syntax). The engine
+   silently ignores the parameter. Official wiki (Arma_Reforger:Startup_Parameters):
+   - `-addonsDir <path>` — extra directory to search for mods
+   - `-addons <GUID>` — comma-separated list of mod IDs (GUID from the .gproj file)
+2. **Wrong working directory**: `start "" "<exe>"` inherited the batch file's CWD, so the
+   relative addon dir `./addons` pointed at `Q:\GAMES\Reforger-LLM-Squad\addons` instead of
+   the game folder. Fix: `start "" /d "<game_dir>" ...`
+   (evidence: 7/7 bat launches failed this way; Steam launches worked fine)
+3. **Wrong mod format**: `addon.json` / `gproj.conf` are invented formats — the engine does
+   not read them. And the mod used the base-game GUID as its own ID (conflict).
+   A real addon = folder with `addon.gproj` in GameProject format, with its OWN unique
+   GUID and the base game as dependency.
 
-## Correcte structuur
+## Correct structure
 
-```
+```text
 reforger_mod/
   addons/
-    ReforgerLLMSquad/          <- mod folder (naam is vrij)
+    ReforgerLLMSquad/          <- mod folder (name is free)
       addon.gproj              <- GameProject { ID, GUID, Dependencies }
       Scripts/Game/
         LLMBridge.c
 ```
 
-Onze mod-GUID: `7E5A1C9B3D8F2406` (nooit `58D0FB3206B6F859` gebruiken — dat is de base game).
+Our mod GUID: `7E5A1C9B3D8F2406` (never use `58D0FB3206B6F859` — that is the base game).
 
-## Correcte launch (zie launch_reforger.bat)
+## Correct launch (see launch_reforger.bat)
 
-```
+```bat
 start "" /d "Q:\SteamLibrary\steamapps\common\Arma Reforger" "Q:\SteamLibrary\steamapps\common\Arma Reforger\ArmaReforgerSteam.exe" -addonsDir "Q:\GAMES\Reforger-LLM-Squad\reforger_mod\addons" -addons "7E5A1C9B3D8F2406"
 ```
 
-## Verifieren
+## How to verify
 
-Nieuwste log: `My Games\ArmaReforger\logs\logs_<timestamp>\console.log`
+Run: `powershell -NoProfile -File scripts\check_latest_log.ps1`
+(newest log: `My Games\ArmaReforger\logs\logs_<timestamp>\console.log`)
 
-- GEEN `Game addon '58D0FB3206B6F859' not found` meer
-- Log is veel groter dan ~1145 bytes (= oude crash-signatuur)
-- Regels met `ReforgerLLMSquad` / geladen gproj
-- Eventuele `SCRIPT (E)` compile errors in LLMBridge.c = volgende stap (F1.2):
-  het script is nog niet als component geregistreerd en wordt dus ook nog nergens
-  geinstantieerd — [LLMBridge] meldingen verschijnen pas na component-wiring.
+- NO more `Game addon '58D0FB3206B6F859' not found`
+- Log much larger than ~1145 bytes (= old crash signature)
+- Lines containing `ReforgerLLMSquad` / loaded gproj
+- Any `SCRIPT (E)` compile errors in LLMBridge.c = next step (F1.2)
 
-## Aanbevolen (wiki: Arma_Reforger:Mod_Project_Setup)
+## Status 2026-08-07 — FIXED & VERIFIED
 
-Installeer **Arma Reforger Tools** (gratis op Steam) voor de Workbench: projecten aanmaken,
-scripts debuggen, Play-mode testen en publiceren naar de Workshop. De Tools waren niet
-gevonden in `Q:\SteamLibrary\steamapps\common\`.
+The game now starts with the mod loaded and scripts compiled (console.log ~20KB+,
+main menu reached). Script bugs fixed along the way:
 
-## Bronnen
+| Error | Cause | Fix |
+|---|---|---|
+| `modclass LLMBridge : Component` | `modclass` does not exist in Enforce | `class LLMBridge` (wiring = F1.2) |
+| line 46 "Broken expression" | nested classes (`class SquadMember` inside `class LLMBridge`) are not allowed | classes at file scope: `LLMSquadMember`, `LLMWaypoint` (also renamed to avoid clash with engine class `Waypoint`) |
+| `new RestContext()` / `SetMethod` / `Start` | invented API | real API: `GetGame().GetRestApi().GetContext(url)` + `GET(cb, path)` / `POST(cb, path, body)` + `RestCallback` |
+| "Method '~RestContext' is private" | `ref RestContext` = ownership, destructor is private | non-ref: `RestContext m_Rest;` |
+| "Undefined function 'World.GetGameTime'" | does not exist in Reforger | own timer accumulated via `timeslice` in `Update()` |
+
+Remaining warnings (deliberately kept, fully functional):
+- `'OnSuccess'/'OnError' is obsolete: Use RestCallback.SetOnSuccess()` — deprecated
+  override style, still works. Cleanup = later.
+
+## Next step (F1.2 from PROJECT_PLAN)
+
+`LLMBridge` is not instantiated anywhere yet -> NO `[LLMBridge]` lines appear in-game.
+Wiring: `modded class SCR_BaseGameMode` that creates an `LLMBridge` on OnGameStart,
+calls `Activate()`, and periodically calls `Update(timeslice)` via
+`GetGame().GetCallqueue().CallLater()`.
+
+## Recommended (wiki: Arma_Reforger:Mod_Project_Setup)
+
+Install **Arma Reforger Tools** (free on Steam) for the Workbench: create projects,
+live script compile errors, Play mode and Workshop publishing. The Tools ARE installed
+on this machine (ArmaReforgerWorkbenchSteam.exe was seen running).
+
+## Sources
 
 - https://community.bistudio.com/wiki/Arma_Reforger:Startup_Parameters
 - https://community.bistudio.com/wiki/Arma_Reforger:Mod_Project_Setup
-- https://feedback.bistudio.com/T164922 (zelfde "Check setup guidelines" melding)
 - https://community.bistudio.com/wiki/Arma_Reforger:REST_API_Usage
-
----
-
-## Status 2026-08-07 — OPGELOST & GEVERIFIEERD
-
-De game start nu met de mod geladen en scripts gecompileerd (console.log ~20KB+,
-hoofdmenu bereikt). Onderweg ook deze script-fouten gefixt:
-
-| Fout | Oorzaak | Fix |
-|---|---|---|
-| `modclass LLMBridge : Component` | `modclass` bestaat niet in Enforce | `class LLMBridge` (wiring = F1.2) |
-| regel 46 "Broken expression" | geneste classes (`class SquadMember` in `class LLMBridge`) mag niet | classes op file scope: `LLMSquadMember`, `LLMWaypoint` (ook hernoemd i.v.m. engine class `Waypoint`) |
-| `new RestContext()` / `SetMethod` / `Start` | verzonnen API | echte API: `GetGame().GetRestApi().GetContext(url)` + `GET(cb, path)` / `POST(cb, path, body)` + `RestCallback` |
-| "Method '~RestContext' is private" | `ref RestContext` = ownership, destructor is private | non-ref: `RestContext m_Rest;` |
-| "Undefined function 'World.GetGameTime'" | bestaat niet in Reforger | eigen tijd-accumulatie via `timeslice` in `Update()` |
-
-Resterende warnings (bewust gelaten, werken gewoon):
-- `'OnSuccess'/'OnError' is obsolete: Use RestCallback.SetOnSuccess()` — deprecated
-  override-stijl, functioneel. Opruimen = later.
-
-## Volgende stap (F1.2 uit PROJECT_PLAN)
-
-`LLMBridge` wordt nog nergens geinstantieerd -> er verschijnen dus nog GEEN
-`[LLMBridge]` regels in-game. Wiring: `modded class SCR_BaseGameMode` die bij
-OnGameStart een `LLMBridge` maakt, `Activate()` aanroept en via
-`GetGame().GetCallqueue().CallLater()` periodiek `Update(timeslice)` aanroept.
+- https://feedback.bistudio.com/T164922 (same "Check setup guidelines" message)

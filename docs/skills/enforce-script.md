@@ -1,39 +1,39 @@
-# Skill: Enforce script (Arma Reforger) — compiler-lessen
+# Skill: Enforce script (Arma Reforger) — compiler lessons
 
-> Lessen uit echte compile-fouten, 2026-08-07 (build 190965). Elke regel hier is een keer
-> foutgegaan en via `console.log` `SCRIPT (E)` gediagnosticeerd.
+> Lessons from real compile failures, 2026-08-07 (build 190965). Every rule here went wrong
+> once and was diagnosed via `SCRIPT (E)` lines in `console.log`.
 
-## 1. Module-systeem & naamgeving
+## 1. Module system & naming
 
-- `Scripts/<Module>/` bepaalt de script-module. `Scripts/Game/x.c` → module `Game`.
-- Bij een unpacked script-addon wordt de HELE Game-module hercompileerd: base-game sources
-  (uit `data.pak`) + jouw files. Base-game errors ná jouw errors = cascade — fix jouw file eerst.
-- Class-namen zijn globaal per module → ALTIJD prefixen (wij gebruiken `LLM`). Botsing met
-  engine-classes (bv. `Waypoint`) = compile error.
+- `Scripts/<Module>/` determines the script module. `Scripts/Game/x.c` → module `Game`.
+- With an unpacked script addon, the ENTIRE Game module is recompiled: base-game sources
+  (from `data.pak`) + your files. Base-game errors AFTER your errors = cascade — fix your file first.
+- Class names are global per module → ALWAYS prefix (we use `LLM`). Colliding with
+  engine classes (e.g. `Waypoint`) = compile error.
 
-## 2. Taalregels (met fout → fix)
+## 2. Language rules (failure → fix)
 
-| Fout | Waarom | Fix |
+| Failure | Why | Fix |
 |---|---|---|
-| `modclass X : Y` | keyword bestaat niet | `class X` of `modded class BestaandeClass` |
-| `class B` BINNEN `class A` | geneste classes bestaan niet → "Broken expression" op die regel, "Unmatched brackets"/"Invalid statement ':'" verderop | ALLE classes op file scope |
-| `ref RestContext x;` | destructor is private ("Method '~RestContext' is private") | non-ref handle: `RestContext x;` — RestApi bezit het object |
-| `GetGame().GetWorld().GetGameTime()` | bestaat niet in Reforger ("Undefined function 'World.GetGameTime'") | eigen timer: `m_fTime += timeslice;` in een Update-loop (timeslice = seconden) |
-| `override` op methode zonder base class | geen base → geen override | `override` weglaten |
-| ternary `(a ? "x" : y)` in string-concat | fragiel in parser | if/else met tijdelijke variabele |
-| `"txt" + mijnBool` | bool-concat is fragiel | helper: `if (b) return "true"; return "false";` |
-| `vector v = "0 0 0";` | — | WERKT (string→vector conversie bestaat) |
+| `modclass X : Y` | keyword does not exist | `class X` or `modded class ExistingClass` |
+| `class B` INSIDE `class A` | nested classes do not exist → "Broken expression" at that line, "Unmatched brackets"/"Invalid statement ':'" further down | ALL classes at file scope |
+| `ref RestContext x;` | destructor is private ("Method '~RestContext' is private") | non-ref handle: `RestContext x;` — RestApi owns the object |
+| `GetGame().GetWorld().GetGameTime()` | does not exist in Reforger ("Undefined function 'World.GetGameTime'") | own timer: `m_fTime += timeslice;` in an Update loop (timeslice = seconds) |
+| `override` on a method without base class | no base → no override | drop `override` |
+| ternary `(a ? "x" : y)` inside string concat | fragile in the parser | if/else with a temp variable |
+| `"text" + myBool` | bool concat is fragile | helper: `if (b) return "true"; return "false";` |
+| `vector v = "0 0 0";` | — | WORKS (string→vector conversion exists) |
 
-- `Print("...")` → `console.log` (onze runtime-logging). Geen `throw` gebruiken voor flow.
-- `ref` = ownership-reference; weglaten = non-owning pointer. Eigen classes: `ref` is prima.
-- Constructors: `void ClassName(args)`. `new array<ref T>` zonder haakjes werkt.
+- `Print("...")` → `console.log` (our runtime logging). Do not use `throw` for control flow.
+- `ref` = ownership reference; omitting it = non-owning pointer. For your own classes `ref` is fine.
+- Constructors: `void ClassName(args)`. `new array<ref T>` without parentheses works.
 
-## 3. REST API (de ECHTE API — wiki: Arma_Reforger:REST_API_Usage)
+## 3. REST API (the REAL API — wiki: Arma_Reforger:REST_API_Usage)
 
-Alleen GET en POST. Patroon dat compileert én werkt:
+GET and POST only. A pattern that compiles AND works:
 
 ```cs
-class MijnCallback : RestCallback
+class MyCallback : RestCallback
 {
     override void OnSuccess(string data, int dataSize)
     {
@@ -45,20 +45,20 @@ class MijnCallback : RestCallback
     }
 }
 
-// ergens in je logica:
+// somewhere in your logic:
 RestContext ctx = GetGame().GetRestApi().GetContext("http://127.0.0.1:5001"); // NON-ref member!
-ctx.GET(new MijnCallback(), "/health");
-ctx.POST(new MijnCallback(), "/sitrep", "{\"key\": \"value\"}");
+ctx.GET(new MyCallback(), "/health");
+ctx.POST(new MyCallback(), "/sitrep", "{\"key\": \"value\"}");
 ```
 
-- `GetContext(baseUrl)` — daarna zijn paths relatief (`/health`).
-- Overrides `OnSuccess`/`OnError` geven `obsolete`-WARNINGS (geen errors): de moderne stijl is
-  `RestCallback.SetOnSuccess(...)`. Overrides werken gewoon; warnings zijn acceptabel.
-- Callbacks `new`en per request is het gangbare patroon.
-- FOUT patroon (verzonnen, compileert niet): `new RestContext()`, `SetURL()`, `SetMethod(RestMethod.POST)`, `.Start()`.
+- `GetContext(baseUrl)` — after that, paths are relative (`/health`).
+- The `OnSuccess`/`OnError` overrides produce `obsolete` WARNINGS (not errors): the modern style is
+  `RestCallback.SetOnSuccess(...)`. Overrides still work; warnings are acceptable.
+- Creating a fresh callback per request is the common pattern.
+- WRONG pattern (invented, does not compile): `new RestContext()`, `SetURL()`, `SetMethod(RestMethod.POST)`, `.Start()`.
 
-## 4. Verifiëren
+## 4. How to verify
 
-Compile-status staat in de nieuwste `console.log`:
-- GOED: `Module: Game; loaded Nx files` regels, geen `Can't compile "Game" script module!`
-- FOUT: `SCRIPT (E): @"scripts/Game/<file>.c,<regel>": <melding>` — regelnummers zijn accuraat.
+Compile status lives in the newest `console.log`:
+- GOOD: `Module: Game; loaded Nx files` lines, no `Can't compile "Game" script module!`
+- BAD: `SCRIPT (E): @"scripts/Game/<file>.c,<line>": <message>` — line numbers are accurate.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sync AGENTS.md (source of truth) naar tool-native kopieen.
-# Gebruik dit i.p.v. symlinks op Windows / OSS-shared repos.
+# Sync AGENTS.md (source of truth) to tool-native copies.
+# Use this INSTEAD of symlinks on Windows / OSS-shared repos.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 for f in CLAUDE.md .goosehints; do

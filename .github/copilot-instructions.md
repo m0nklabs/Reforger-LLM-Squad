@@ -1,21 +1,23 @@
-<!-- Canonical source of truth: AGENTS.md (repo root). Dit bestand is Copilot-native en bewust compact. -->
+<!-- Canonical source of truth: AGENTS.md (repo root). This file is Copilot-native and deliberately compact. -->
 # GitHub Copilot Instructions
 
-Lees eerst **AGENTS.md** (repo root) — dat is de source of truth voor alle AI-tools in deze repo.
+Read **AGENTS.md** (repo root) first — it is the source of truth for all AI tools in this repo.
 
-## ⛔ 3 fatale valkuilen (al een keer foutgegaan — niet herhalen)
-1. `-mod=` bestaat NIET in Reforger → mods laden = `-addonsDir <pad> -addons <GUID>`.
-2. Game starten ALLEEN via `launch_reforger.bat` (die zet de working directory = game-dir; anders "Missing Addon 58D0FB3206B6F859" + Engine Init Error).
-3. GUID `58D0FB3206B6F859` = de base game; onze mod = `7E5A1C9B3D8F2406`.
+## ⛔ 3 fatal pitfalls (already went wrong once — do not repeat)
+1. `-mod=` does NOT exist in Reforger → load mods with `-addonsDir <path> -addons <GUID>`.
+2. Start the game ONLY via `launch_reforger.bat` (it sets working directory = game dir; otherwise "Missing Addon 58D0FB3206B6F859" + Engine Init Error).
+3. GUID `58D0FB3206B6F859` = the base game; our mod = `7E5A1C9B3D8F2406`.
 
-## Kernregels
-1. Verifieer ALLES empirisch: kill game → `launch_reforger.bat` → ~50s → `powershell -NoProfile -File scripts\check_latest_log.ps1`. Nooit "fixed" claimen zonder log-bewijs.
-2. Enforce: geen geneste classes; `class`/`modded class`; geen `ref RestContext`; geen `World.GetGameTime()`. Zie `docs/skills/enforce-script.md`.
-3. REST in-game: `GetGame().GetRestApi().GetContext(url)` + `GET/POST(cb, ...)` met `RestCallback`.
-4. Route/poort-sync game↔bridge: bridge = poort 5001; routes moeten matchen met `python_bridge/main.py`.
-5. Geen secrets committen: `python_bridge/config.json` is gitignored (template: `config.example.json`).
+## Core rules
+1. Verify EVERYTHING empirically: kill game → `launch_reforger.bat` → ~50s → `powershell -NoProfile -File scripts\check_latest_log.ps1`. Never claim "fixed" without log evidence.
+2. Enforce: no nested classes; `class`/`modded class`; no `ref RestContext`; no `World.GetGameTime()`. See `docs/skills/enforce-script.md`.
+3. REST in-game: `GetGame().GetRestApi().GetContext(url)` + `GET/POST(cb, ...)` with `RestCallback`.
+4. Route/port sync game↔bridge: bridge = port 5001; routes must match `python_bridge/main.py`.
+5. Never commit secrets: `python_bridge/config.json` is gitignored (template: `config.example.json`). No API keys in docs.
 
-Detail-skills (lees bij werk aan dat gebied):
-- `docs/skills/arma-reforger-modding.md` — addon-structuur, GUIDs, launch-parameters
-- `docs/skills/enforce-script.md` — Enforce-taalregels + REST-patroon
-- `docs/skills/reforger-debugging.md` — console.log-signatures + test-cyclus
+Detail skills (read when working in that area):
+- `docs/skills/arma-reforger-modding.md` — addon structure, GUIDs, launch parameters
+- `docs/skills/enforce-script.md` — Enforce language rules + REST pattern
+- `docs/skills/reforger-debugging.md` — console.log signatures + test cycle
+
+Language: English everywhere (code, comments, docs, commits).

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Guards: (1) sync-drift  (2) secrets  (3) mod-GUID
+# Guards: (1) sync drift  (2) secrets  (3) mod GUID
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 for f in CLAUDE.md .goosehints; do
   if [ -f "$f" ]; then
-    diff -q AGENTS.md "$f" >/dev/null || { echo "ERROR: $f out of sync met AGENTS.md - run scripts/sync-agent-docs"; exit 1; }
+    diff -q AGENTS.md "$f" >/dev/null || { echo "ERROR: $f out of sync with AGENTS.md - run scripts/sync-agent-docs"; exit 1; }
   fi
 done
 
 if git diff --cached --name-only | grep -q "^python_bridge/config.json$"; then
-  echo "ERROR: python_bridge/config.json bevat secrets en is gitignored - niet forceren!"
+  echo "ERROR: python_bridge/config.json contains secrets and is gitignored - do not force-add it!"
   exit 1
 fi
 
 if git diff --cached --name-only | grep -q "addon.gproj$"; then
   grep -q 'GUID "7E5A1C9B3D8F2406"' reforger_mod/addons/ReforgerLLMSquad/addon.gproj || {
-    echo "ERROR: mod-GUID in addon.gproj gewijzigd - dat breekt launch_reforger.bat (-addons 7E5A1C9B3D8F2406)!"
+    echo "ERROR: mod GUID in addon.gproj changed - that breaks launch_reforger.bat (-addons 7E5A1C9B3D8F2406)!"
     exit 1
   }
 fi

@@ -1,47 +1,45 @@
-# Skill: Arma Reforger debug-workflow (console.log-driven)
+# Skill: Arma Reforger debug workflow (console.log-driven)
 
-> De workflow waarmee de launch-errors van 2026-08-07 in ~4 cycli zijn opgelost.
+> The workflow that solved the 2026-08-07 launch errors in ~4 cycles.
 
-## 1. Waar staat wat
+## 1. Where things live
 
-| Wat | Waar |
+| What | Where |
 |---|---|
-| Game-logs | `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\logs_<yyyy-mm-dd_hh-mm-ss>\console.log` (LET OP: OneDrive-pad hier) |
-| Game-exe | `Q:\SteamLibrary\steamapps\common\Arma Reforger\ArmaReforgerSteam.exe` |
+| Game logs | `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\logs_<yyyy-mm-dd_hh-mm-ss>\console.log` (NOTE: OneDrive path here) |
+| Game exe | `Q:\SteamLibrary\steamapps\common\Arma Reforger\ArmaReforgerSteam.exe` |
 | Base-game addons | `<game>\addons\core\` + `<game>\addons\data\` (packed) |
-| Bridge-log | `python_bridge\bridge.log` |
+| Bridge log | `python_bridge\bridge.log` |
 
-## 2. Log-signatures (sneldiagnose)
+## 2. Log signatures (quick diagnosis)
 
-| Signatuur | Betekenis |
+| Signature | Meaning |
 |---|---|
-| console.log ≈ **1145 bytes** | engine-init crash (bv. addon niet gevonden) — game dood voor menu |
-| `Game addon '58D0FB3206B6F859' not found` | BASE GAME data niet gevonden → CWD/`./addons` probleem, NIET jouw mod |
-| `SCRIPT (E): @"scripts/Game/X.c,REGEL": ...` | compile error; regelnummer klopt |
-| `Can't compile "Game" script module!` | ≥1 compile error in module Game; game blijft draaien maar scripts draaien NIET |
-| errors in base-game `.c` files ná jouw file | cascade-ruis — fix eerst jouw eerste error |
-| log >15KB met BACKEND/PLATFORM regels | gezond; hoofdmenu bereikt |
-- De LAATSTE regel van een afgebroken log herhaalt vaak de eerste echte fout.
+| console.log ≈ **1145 bytes** | engine-init crash (e.g. addon not found) — game dead before menu |
+| `Game addon '58D0FB3206B6F859' not found` | BASE GAME data not found → CWD/`./addons` problem, NOT your mod |
+| `SCRIPT (E): @"scripts/Game/X.c,LINE": ...` | compile error; the line number is accurate |
+| `Can't compile "Game" script module!` | ≥1 compile error in module Game; game keeps running but scripts do NOT run |
+| errors in base-game `.c` files AFTER your file | cascade noise — fix your first error first |
+| log >15KB with BACKEND/PLATFORM lines | healthy; main menu reached |
+- The LAST line of an aborted log often repeats the first real error.
 
-## 3. Test-cyclus (copy-paste, ~60s per iteratie)
+## 3. Test cycle (~60s per iteration)
 
 ```bat
 taskkill /F /IM ArmaReforgerSteam.exe 2>nul
 start "" /min cmd /c "Q:\GAMES\Reforger-LLM-Squad\launch_reforger.bat"
 ```
-~50s wachten, dan nieuwste log lezen (PowerShell):
+Wait ~50s, then run the one-command check:
 ```powershell
-$d = Get-ChildItem "$env:USERPROFILE\OneDrive\Documents\My Games\ArmaReforger\logs" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-$f = Join-Path $d.FullName 'console.log'
-(Get-Item $f).Length                                   # 1145 = crash-signatuur
-Select-String $f -Pattern 'SCRIPT.*\(E\)','not found','Module: Game' | ForEach-Object { $_.Line.Trim() }
+powershell -NoProfile -File scripts\check_latest_log.ps1
 ```
+It prints the newest log, mod-loaded status, all `(E)` errors and a final OK / NO-GO verdict.
 
-## 4. Praktische valkuilen
+## 4. Practical pitfalls
 
-- `tasklist | findstr /i ArmaReforgerSteam` — check of de game (nog) draait voor je relauncht.
-  Bij een script-compile-error blijft het proces vaak wél leven (error-dialog/scherm) — kill hem.
-- Game start via een bat → elke run = nieuw minimized cmd-venster met `pause` (onschuldig).
-- `ArmaReforgerWorkbenchSteam` in tasklist = Workbench/Tools draait (andere app dan de game).
-- Meerdere log-mappen per uur is normaal; sorteer op naam (= tijd).
-- OneDrive sync op "My Games" kan log-writes vertragen; bij twijfel paar seconden extra wachten.
+- `tasklist | findstr /i ArmaReforgerSteam` — check whether the game is (still) running before relaunching.
+  On a script-compile error the process often STAYS alive (error dialog/screen) — kill it.
+- Starting via a bat → each run spawns a new minimized cmd window with `pause` (harmless).
+- `ArmaReforgerWorkbenchSteam` in tasklist = Workbench/Tools running (different app from the game).
+- Multiple log folders per hour is normal; sort by name (= time).
+- OneDrive sync on "My Games" can delay log writes; when in doubt wait a few extra seconds.

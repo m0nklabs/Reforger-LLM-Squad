@@ -1,10 +1,10 @@
 # PROJECT PLAN: Reforger LLM Squad Control
 
-> ⚠️ **2026-08-07 — GECORRIGEERD.** Dit plan stamt van vóór de launch-fix en bevatte foute
-> `-mod`-instructies en een foute bridge-poort. Hieronder aangepast, maar bij ELKE
-> tegenstrijdigheid gelden **AGENTS.md** en **MOD_SETUP.md** als waarheid.
-> Kort: `-mod` bestaat NIET in Reforger → gebruik `launch_reforger.bat`
-> (`-addonsDir` + `-addons <GUID>`, working dir = game-dir). Bridge-poort = **5001**.
+> ⚠️ **2026-08-07 — CORRECTED & translated to English.** This plan predates the launch fix and
+> contained wrong `-mod` instructions and a wrong bridge port. Those are fixed below, but if
+> anything contradicts **AGENTS.md** or **MOD_SETUP.md**, those two win.
+> Short version: `-mod` does NOT exist in Reforger → use `launch_reforger.bat`
+> (`-addonsDir` + `-addons <GUID>`, working dir = game dir). Bridge port = **5001**.
 
 ## Document Status
 - **Created**: 2026-08-06
@@ -15,104 +15,82 @@
 
 ## 1. PROJECT OVERVIEW
 
-### 1.1 Doel
-Bouw een LLM-powered squad control systeem voor Arma Reforger dat de operator in staat stelt om via natuurlijke taal (tekst in fase 1, spraak in fase 2) een AI-squad aan te sturen, en waarbij squadleden autonomoom observaties en statusupdates terugreporteren.
+### 1.1 Goal
+Build an LLM-powered squad control system for Arma Reforger that lets the operator direct an
+AI squad using natural language (text in phase 1, voice in phase 2), with squad members
+autonomously reporting observations and status updates.
 
-### 1.2 Architectuur
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        OPERATOR (you)                                │
-│  Start game via launch_reforger.bat   |  Start python_bridge/main.py      │
-└──────────────┬──────────────────────────────┬───────────────────────┘
-               │                              │
-               ▼                              ▼
-┌──────────────────────────┐    ┌───────────────────────────────────┐
-│   Arma Reforger (Game)   │    │     Python Bridge (FastAPI)       │
-│                          │    │         port 5000                  │
-│  Enforce Script:         │    │                                   │
-│  ┌─────────────────────┐ │    │  ┌─────────┐  ┌──────────────┐    │
-│  │ LLMBridgeComponent  │◄├─────►│/health  │  │ /command     │    │
-│  │  • Collect SITREP   │ │    │  │/sitrep  │  │ /voice (P2)  │    │
-│  │  • POST to Python   │ │    │  └─────────┘  └──────┬───────┘    │
-│  │  • Execute waypoint │ │    │                       │            │
-│  │  • Radio callbacks  │ │    │                       ▼            │
-│  └─────────────────────┘ │    │              ┌──────────────┐     │
-│                          │    │              │ OpenAI SDK   │     │
-└──────────────────────────┘    │              │ (function    │     │
-                                │              │  calling)    │     │
-                                │              └──────┬───────┘     │
-                                └─────────────────────┼─────────────┘
-                                                       │
-                                       ┌───────────────▼───────────────┐
-                                       │  Jouw Proxy (192.168.1.35)    │
-                                       │  OpenAI-compatible API        │
-                                       │  port 11434                   │
-                                       └───────────────┬───────────────┘
-                                                       │
-                                       ┌───────────────▼───────────────┐
-                                       │  llama-server (backend)       │
-                                       │  Local LLM inference          │
-                                       └───────────────────────────────┘
+### 1.2 Architecture
+```text
+OPERATOR:  launch_reforger.bat                 start_bridge.bat
+                |                                   |
+                v                                   v
++---------------------+   HTTP    +---------------------+   HTTP    +----------------------+
+| Arma Reforger       | --------> | Python Bridge       | --------> | LLM Proxy            |
+| LLMBridge.c         | <-------- | FastAPI :5001       | <-------- | 192.168.1.35:11434   |
+| (Enforce script)    |   JSON    | /health /sitrep     |  OpenAI   | /v1 (OpenAI-compat)  |
++---------------------+           | /command /status    |   SDK     +----------+-----------+
+                                  +---------------------+                      |
+                                                                      llama-server
+                                                                      (local inference)
 ```
 
 ### 1.3 Data Flow
-1. **Game → Python**: Enforce Script verzamelt squad telemetry (posities, health, ammo, enemies) en stuurt deze als JSON via HTTP POST naar `localhost:5000/sitrep`
-2. **Python → LLM**: Python stuurt de situatie + operator commando naar de proxy via OpenAI function calling
-3. **LLM → Python**: LLM retourneert gestructureerde JSON (`{squad, action, grid, voice_reply}`)
-4. **Python → Game**: Python stuurt de JSON terug als HTTP response; Enforce Script voert het uit (waypoints, suppressie, etc.)
-5. **Game → Operator**: Squadleden rapporteren via in-game sideChat/radio (fase 1: tekst, fase 2: TTS audio)
+1. **Game → Python**: Enforce Script collects squad telemetry (positions, health, ammo, enemies) and sends it as JSON via HTTP POST to `localhost:5001/sitrep`
+2. **Python → LLM**: Python sends the situation + operator command to the proxy via OpenAI function calling
+3. **LLM → Python**: LLM returns structured JSON (`{squad, action, grid, voice_reply}`)
+4. **Python → Game**: Python returns the JSON as HTTP response; Enforce Script executes it (waypoints, suppression, etc.)
+5. **Game → Operator**: Squad members report via in-game sideChat/radio (phase 1: text, phase 2: TTS audio)
 
 ---
 
 ## 2. ENVIRONMENT INVENTORY
 
-### 2.1 Game Installatie
-| Eigenschap | Waarde |
+### 2.1 Game Installation
+| Property | Value |
 |---|---|
-| Game directory | `Q:\GAMES\Arma Reforger` |
-| Executable | `ArmaReforger_BE.exe` |
+| Game directory | `Q:\SteamLibrary\steamapps\common\Arma Reforger` |
+| Executable | `ArmaReforgerSteam.exe` |
 | Addons | `addons/core/`, `addons/data/` |
-| Main gproj | `addons/data/ArmaReforger.gproj` |
-| Steam emulator | `tenoke.dll` / `tenoke.ini` (appid 1874880) |
-| Workbench | **Niet geïnstalleerd** — niet nodig voor dit project |
-| Workshop | **Niet beschikbaar** — mods worden lokaal geladen |
+| Main gproj | `addons/data/ArmaReforger.gproj` (GUID `58D0FB3206B6F859`) |
+| Workbench (Tools) | Installed (ArmaReforgerWorkbenchSteam.exe seen running) |
+| Workshop | Not used — mods are loaded locally via `-addonsDir`/`-addons` |
 
 ### 2.2 LLM Proxy
-| Eigenschap | Waarde |
+| Property | Value |
 |---|---|
 | URL | `http://192.168.1.35:11434/v1` |
-| API Key | `goosedesktop_dc85e569751041ef9e1a2576fa2c2553` |
+| API Key | stored in `python_bridge/config.json` (GITIGNORED — never in docs/git) |
 | Protocol | OpenAI-compatible (`/v1/chat/completions`) |
-| JSON mode | ✅ Getest — `response_format: {type: "json_object"}` werkt |
-| Function calling | ✅ Getest — `tools` + `tool_choice` werkt |
-| Snel model | `llama3` (3B) — 335ms latency, function calling confirmed |
-| Slim model | `qwen3.6-35b-fast` (35B MoE A3B) — ~2000ms, thinking model, heeft 800+ tokens nodig |
+| JSON mode | ✅ Tested — `response_format: {type: "json_object"}` works |
+| Function calling | ✅ Tested — `tools` + `tool_choice` works |
+| Fast model | `llama3` (3B) — 335ms latency, function calling confirmed |
+| Smart model | `qwen3.6-35b-fast` (35B MoE A3B) — ~2000ms, thinking model, needs 800+ tokens |
 | Cloud fallbacks | GPT-5 series, Claude 3.5, Gemini, etc. via proxy |
 
 ### 2.3 Python
-| Eigenschap | Waarde |
+| Property | Value |
 |---|---|
-| Versie | Python 3.12.10 |
-| Pad | `C:\Users\onyou\AppData\Local\Programs\Python\Python312\` |
-| pip | 25.0.1 |
-| venv | Beschikbaar |
-| Whisper | **Niet geïnstalleerd** — wordt in fase 2 geïnstalleerd via `faster-whisper` |
+| Version | Python 3.12.10 (system); project venv reports 3.11 (`main.cpython-311.pyc`) |
+| Path | `C:\Users\onyou\AppData\Local\Programs\Python\Python312\` |
+| venv | `python_bridge/venv/` (gitignored) |
+| Whisper | **Not installed** — phase 2 via `faster-whisper` |
 
 ### 2.4 Project Directory
-| Pad | Inhoud |
+| Path | Content |
 |---|---|
 | `Q:\GAMES\Reforger-LLM-Squad\` | Project root |
-| `Q:\GAMES\Reforger-LLM-Squad\docs\` | Bohemia SampleMods referentie (Enforce Script voorbeelden) |
-| `Q:\GAMES\Reforger-LLM-Squad\reforger_mod\` | Mod broncode (alle bestanden momenteel 0 bytes) |
-| `Q:\GAMES\Reforger-LLM-Squad\python_bridge\` | Python backend (alle bestanden momenteel 0 bytes) |
+| `...\docs\` | Bohemia SampleMods reference (gitignored) + `docs/skills/` (tracked, lessons-learned) |
+| `...\reforger_mod\` | Mod source: `addons/ReforgerLLMSquad/` (addon.gproj + Scripts/Game/LLMBridge.c) |
+| `...\python_bridge\` | Python backend (main.py, config.json gitignored, test_client.py) |
 
-### 2.5 Netwerk Referentie
-| Eigenschap | Waarde |
+### 2.5 Network Reference
+| Property | Value |
 |---|---|
 | Game machine | Windows (localhost) |
-| LLM proxy machine | `192.168.1.35` (LAN, zelfde netwerk) |
-| Python bridge | localhost (`127.0.0.1:5000`) |
-| Game → Python | HTTP POST via `RestContext` (Enfusion native) |
+| LLM proxy machine | `192.168.1.35` (LAN, same network) |
+| Python bridge | localhost (`127.0.0.1:5001`) |
+| Game → Python | HTTP POST via `GetGame().GetRestApi().GetContext()` (Enfusion native) |
 | Python → Proxy | HTTP via `openai` Python SDK |
 
 ---
@@ -120,149 +98,141 @@ Bouw een LLM-powered squad control systeem voor Arma Reforger dat de operator in
 ## 3. CONSTRAINTS & ASSUMPTIONS
 
 ### 3.1 Hard Constraints
-1. **Geen Workbench**: Enforce Script `.c` files worden als plain text geschreven. De game compileert scripts bij runtime.
-2. **Geen Steam Workshop**: Mods worden lokaal geladen via `-addonsDir <pad>` + `-addons <GUID>` (gecorrigeerd 2026-08-07: `-mod` bestaat NIET — zie AGENTS.md).
-3. **Geen BattlEye server**: Single-player of local hosted. Anti-cheat is niet actief in single-player.
-4. **Enforce Script is geen C#**: Het lijkt erop, maar heeft beperkingen. Classes moeten in specifieke mappen, `modded class` syntax voor overrides.
+1. **No Workbench required**: Enforce Script `.c` files are written as plain text. The game compiles scripts at runtime.
+2. **No Steam Workshop**: mods are loaded locally via `-addonsDir <path>` + `-addons <GUID>` (corrected 2026-08-07: `-mod` does NOT exist — see AGENTS.md).
+3. **No BattlEye server**: single-player or locally hosted. Anti-cheat is not active in single-player.
+4. **Enforce Script is not C#**: it looks like it, but has limitations. Classes live in specific folders, `modded class` syntax for overrides. See `docs/skills/enforce-script.md`.
 
 ### 3.2 Assumptions
-1. De operator kan de game starten via `launch_reforger.bat` (correcte `-addonsDir`/`-addons` + working directory).
-2. De game compileert unpacked `.c` bestanden bij opstarten (standaard Reforger gedrag).
-3. De proxy blijft beschikbaar tijdens de volledige sessie.
-4. Single-player scenario's werken zonder server-infrastructuur.
+1. The operator can start the game via `launch_reforger.bat` (correct `-addonsDir`/`-addons` + working directory).
+2. The game compiles unpacked `.c` files at startup (verified 2026-08-07).
+3. The proxy stays available for the full session.
+4. Single-player scenarios work without server infrastructure.
 
 ---
 
 ## 4. PHASED DELIVERY PLAN
 
-### FASE 1: REST Bridge + AI Squad Control (Geen Voice)
-**Doel**: Een werkende HTTP bridge tussen Reforger en de LLM proxy, waarbij de game squad telemetry verstuurt en gestructureerde commando's terugkrijgt.
+### PHASE 1: REST Bridge + AI Squad Control (No Voice)
+**Goal**: a working HTTP bridge between Reforger and the LLM proxy, where the game sends
+squad telemetry and receives structured commands.
 
-#### F1.1 — Python Bridge (`python_bridge/main.py`)
-- [ ] FastAPI server op `127.0.0.1:5000`
-- [ ] `/health` endpoint (GET) — door Reforger gepingd bij mod startup
-- [ ] `/sitrep` endpoint (POST) — ontvangt squad telemetry JSON van Reforger
-- [ ] `/command` endpoint (POST) — ontvangt operator tekst commando, stuurt naar LLM, retourneert JSON
-- [ ] OpenAI SDK koppeling naar proxy (`192.168.1.35:11434/v1`)
-- [ ] Function calling schema: `issue_order(squad, action, grid, voice_reply)`
-- [ ] JSON validatie op alle in/uitgaande payloads
-- [ ] Timeout handling (3s) met fallback commando (HOLD)
-- [ ] Gestructureerde logging naar `python_bridge/bridge.log`
-- [ ] Config file (`python_bridge/config.json`) voor alle instellingen
+#### F1.1 — Python Bridge (`python_bridge/main.py`) — ✅ DONE
+- [x] FastAPI server on `127.0.0.1:5001`
+- [x] `/health` endpoint (GET) — pinged by Reforger at mod startup
+- [x] `/sitrep` endpoint (POST) — receives squad telemetry JSON from Reforger
+- [x] `/command` endpoint (POST) — receives operator text command, forwards to LLM, returns JSON
+- [x] OpenAI SDK connection to proxy (`192.168.1.35:11434/v1`)
+- [x] Function calling schema: `issue_order(squad, action, grid, voice_reply)`
+- [x] JSON validation on all in/outgoing payloads
+- [x] Timeout handling with fallback command (HOLD)
+- [x] Structured logging to `python_bridge/bridge.log`
+- [x] Config file (`python_bridge/config.json`) for all settings
 
-#### F1.2 — Enforce Script (`reforger_mod/Scripts/Game/LLMBridge.c`)
-- [ ] `LLMBridgeComponent` class (geïnstantieerd via modded game component)
-- [ ] `RestContext` initialisatie naar `http://127.0.0.1:5000/`
-- [ ] `RestCallback` subclass voor het afhandelen van responses
-- [ ] `SendSitRep()` — verzamel squad telemetry en POST naar Python
-- [ ] `ExecuteCommand()` — parse JSON response, maak AIWaypoint aan
-- [ ] Health check bij startup — als Python niet draait, mod in "passive mode"
-- [ ] Timer-based SITREP verzending (elke 10 seconden, configureerbaar)
-- [ `sideChat` radio callbacks voor squad status reports
-- [ ] Error handling — nooit crashen op REST failures
+#### F1.2 — Enforce Script (`reforger_mod/addons/ReforgerLLMSquad/Scripts/Game/LLMBridge.c`)
+- [x] `LLMBridge` class written and COMPILING (2026-08-07)
+- [x] `RestContext` via `GetGame().GetRestApi().GetContext()` (real Enfusion API)
+- [x] `RestCallback` subclass for response handling
+- [x] `SendSITREP()`, `SendCommand()`, health check, passive mode, timers
+- [ ] **Component wiring** (open): `modded class SCR_BaseGameMode` that instantiates
+      `LLMBridge` at OnGameStart, calls `Activate()`, and drives `Update()` via
+      `GetGame().GetCallqueue().CallLater()` — only then does anything happen in-game
+- [ ] `sideChat` radio callbacks for squad status reports
 
-#### F1.3 — Mod Configuratie
-- [ ] `reforger_mod/gproj.conf` — mod project metadata
-- [ ] Mod directory structuur:
-  ```
-  reforger_mod/
-    Scripts/
-      Game/
-        LLMBridge.c
-    gproj.conf
-  ```
-- [x] Launch parameter documentatie: `-addonsDir` + `-addons` — GEDAAN 2026-08-07, zie MOD_SETUP.md
+#### F1.3 — Mod Configuration & Route Sync
+- [x] `addon.gproj` with own GUID `7E5A1C9B3D8F2406` (replaces the invented `gproj.conf`)
+- [x] Mod directory structure under `reforger_mod/addons/ReforgerLLMSquad/`
+- [x] Launch parameter documentation: `-addonsDir` + `-addons` — DONE 2026-08-07, see MOD_SETUP.md
+- [ ] Route sync: `/waypoint` missing in main.py; `/status` is GET in main.py but POST in LLMBridge
 
 #### F1.4 — Standalone Test Mode
-- [ ] `python_bridge/test_client.py` — simuleert Reforger game state JSON
-- [ ] Test zonder game draaiend: stuur fake SITREP → ontvang LLM commando
-- [ ] Validatie dat function calling juiste JSON retourneert
-- [ ] Latency meting (mic → LLM → commando)
+- [x] `python_bridge/test_client.py` — simulates Reforger game state JSON
+- [ ] Test without game running: send fake SITREP → receive LLM command
+- [ ] Validate that function calling returns correct JSON
+- [ ] Latency measurement (input → LLM → command)
 
-#### F1.5 — Fase 1 Validatie
-- [ ] Python server start zonder errors
-- [ ] `/health` retourneert 200 OK
-- [ ] Gesimuleerde SITREP → LLM → correcte JSON commando
-- [ ] JSON schema validatie werkt (foute input → graceful fallback)
-- [ ] Timeout fallback werkt (LLM > 3s → HOLD commando)
+#### F1.5 — Phase 1 Validation
+- [ ] Python server starts without errors
+- [ ] `/health` returns 200 OK
+- [ ] Simulated SITREP → LLM → correct JSON command
+- [ ] JSON schema validation works (bad input → graceful fallback)
+- [ ] Timeout fallback works (LLM > 3s → HOLD command)
 
 ---
 
-### FASE 2: Voice Pipeline (Spraak → Squad)
-**Doel**: Operator spreekt in microfoon, Whisper zet om naar tekst, LLM vertaalt naar commando.
+### PHASE 2: Voice Pipeline (Speech → Squad)
+**Goal**: operator speaks into microphone, Whisper converts to text, LLM translates to command.
 
 #### F2.1 — Whisper STT Integration
-- [ ] `faster-whisper` installeren in Python venv
-- [ ] Microfoon opname via `sounddevice`
-- [ ] Push-to-Talk key listener (configbare toets, default `F24`)
-- [ ] Audio → tekst conversie met latency logging
+- [ ] Install `faster-whisper` in the Python venv
+- [ ] Microphone capture via `sounddevice`
+- [ ] Push-to-Talk key listener (configurable key, default `F24`)
+- [ ] Audio → text conversion with latency logging
 - [ ] `/voice` endpoint in FastAPI
 
 #### F2.2 — Voice → LLM → Game Pipeline
-- [ ] Audio opname → Whisper transcriptie
-- [ ] Transcriptie → `/command` endpoint (hergebruik fase 1 logica)
-- [ ] LLM → JSON commando → Reforger
-- [ ] End-to-end latency meting en logging
+- [ ] Audio capture → Whisper transcription
+- [ ] Transcription → `/command` endpoint (reuse phase 1 logic)
+- [ ] LLM → JSON command → Reforger
+- [ ] End-to-end latency measurement and logging
 
-#### F2.3 — Fase 2 Validatie
-- [ ] PTT key werkt (start/stop opname)
-- [ ] Whisper transcribeert correct
-- [ ] Volledige pijplijn: spraak → tekst → LLM → JSON → game actie
+#### F2.3 — Phase 2 Validation
+- [ ] PTT key works (start/stop capture)
+- [ ] Whisper transcribes correctly
+- [ ] Full pipeline: speech → text → LLM → JSON → game action
 
 ---
 
-### FASE 3: TTS Squad Terugkoppeling (Optioneel)
-**Doel**: Squadleden "spreken" hun observaties hardop via TTS.
+### PHASE 3: TTS Squad Feedback (Optional)
+**Goal**: squad members "speak" their observations out loud via TTS.
 
-- [ ] Onderzoek TTS engine (Piper, XTTS, of Coqui)
-- [ ] Integreer TTS in Python bridge
-- [ ] `voice_reply` field uit LLM JSON → audio playback
-- [ ] Radio-style audio in game (via `say3D` of extern audio kanaal)
+- [ ] Research TTS engine (Piper, XTTS, or Coqui)
+- [ ] Integrate TTS into the Python bridge
+- [ ] `voice_reply` field from LLM JSON → audio playback
+- [ ] Radio-style audio in game (via `say3D` or external audio channel)
 
 ---
 
 ## 5. GUARDRAILS
 
-Deze guardrails zorgen ervoor dat het systeem faalt-safe is en de operator geen handmatige tussenkomst nodig heeft bij errors.
+These guardrails make the system fail-safe; the operator should never need manual
+intervention on errors.
 
-### 5.1 JSON Validatie
-- **Python**: Alle inkomende JSON van Reforger wordt gevalideerd met Pydantic models. Ongeldige JSON = HTTP 422 + fallback response `{action: "HOLD", voice_reply: "Invalid data received"}`
-- **Python**: Alle uitgaande JSON naar Reforger wordt gevalideerd tegen het function calling schema. Ongeldige LLM output = retry met striktere prompt of fallback HOLD
-- **Enforce Script**: Alle inkomende JSON van Python wordt geparsed met try/catch. Parse failure = log + ignore (geen crash)
+### 5.1 JSON Validation
+- **Python**: all incoming JSON from Reforger is validated with Pydantic models. Invalid JSON = HTTP 422 + fallback response `{action: "HOLD", voice_reply: "Invalid data received"}`
+- **Python**: all outgoing JSON to Reforger is validated against the function calling schema. Invalid LLM output = retry with stricter prompt or fallback HOLD
+- **Enforce Script**: all incoming JSON from Python is parsed defensively. Parse failure = log + ignore (no crash)
 
 ### 5.2 Timeout Handling
-- **LLM call timeout**: 3 seconden. Bij timeout → fallback commando `{action: "HOLD", voice_reply: "Command timeout, holding position"}`
-- **REST call timeout (Enforce Script)**: 5 seconden. Bij timeout → log + passive mode voor 10 seconden, dan retry
-- **Health check retry**: 3 pogingen met 2s interval bij startup. Daarna passive mode
+- **LLM call timeout**: 3 seconds. On timeout → fallback command `{action: "HOLD", voice_reply: "Command timeout, holding position"}`
+- **REST call timeout (Enforce Script)**: 5 seconds. On timeout → log + passive mode for 10 seconds, then retry
+- **Health check retry**: 3 attempts with 2s interval at startup. Then passive mode
 
 ### 5.3 Rate Limiting
-- **SITREP frequency**: Maximaal 1 per 10 seconden (configureerbaar in `config.json`)
-- **LLM call frequency**: Maximaal 1 per 2 seconden om spam/loops te voorkomen
-- **Queue**: Als een LLM call al loopt, nieuwe requests worden gequeued (max queue: 3, daarna drop oudste)
+- **SITREP frequency**: max 1 per 10 seconds (configurable in `config.json`)
+- **LLM call frequency**: max 1 per 2 seconds to prevent spam/loops
+- **Queue**: if an LLM call is in flight, new requests are queued (max queue: 3, then drop oldest)
 
 ### 5.4 Error Handling
-- **Python**: Alle exceptions worden gelogd naar `bridge.log` met timestamp. Server crasht nooit — FastAPI error handlers vangen alles
-- **Enforce Script**: Alle `RestCallback` errors worden gelogd via `Print()`. Geen `throw`. Script_component blijft draaien in passive mode
-- **Proxy unavailable**: Python detecteert dit, retourneert fallback naar game, logt error
+- **Python**: all exceptions are logged to `bridge.log` with timestamp. The server never crashes — FastAPI error handlers catch everything
+- **Enforce Script**: all `RestCallback` errors are logged via `Print()`. No `throw`. The script keeps running in passive mode
+- **Proxy unavailable**: Python detects this, returns fallback to game, logs error
 
 ### 5.5 Passive Mode
-- Als Python server niet draait bij game startup → mod laadt in passive mode (geen LLM calls, squad gedraagt zich als standaard AI)
-- Als proxy niet bereikbaar is → Python retourneert HOLD commando's, logt errors, probeert elke 30s opnieuw te verbinden
-- Operator hoeft spel niet te herstarten als Python/proxy weer online komt — volgende SITREP cycle detecteert dit automatisch
+- If the Python server is not running at game startup → mod loads in passive mode (no LLM calls, squad behaves as standard AI)
+- If the proxy is unreachable → Python returns HOLD commands, logs errors, retries every 30s
+- Operator does not need to restart the game when Python/proxy comes back online — the next SITREP cycle detects it automatically
 
-### 5.6 Configuratie
-Alle instellingen in één `python_bridge/config.json`:
+### 5.6 Configuration
+All settings in one `python_bridge/config.json` (GITIGNORED — template: `config.example.json`):
 ```json
 {
-  "server": {
-    "host": "127.0.0.1",
-    "port": 5000
-  },
+  "server": { "host": "127.0.0.1", "port": 5001 },
   "llm": {
     "base_url": "http://192.168.1.35:11434/v1",
-    "api_key": "goosedesktop_dc85e569751041ef9e1a2576fa2c2553",
+    "api_key": "<see python_bridge/config.json — never commit>",
     "model": "llama3",
-    "timeout_seconds": 3,
+    "timeout_seconds": 10,
     "max_tokens": 300
   },
   "game": {
@@ -277,125 +247,124 @@ Alle instellingen in één `python_bridge/config.json`:
     "whisper_device": "cpu",
     "whisper_compute_type": "int8"
   },
-  "logging": {
-    "level": "INFO",
-    "file": "bridge.log"
-  }
+  "logging": { "level": "INFO", "file": "bridge.log" }
 }
 ```
 
 ### 5.7 Operator Guardrails
-Dingen die de operator **NIET zelf hoeft te doen** — de agent regelt dit:
+Things the operator does NOT have to do — the agent handles these:
 
-| Taak | Wie | Hoe |
+| Task | Who | How |
 |---|---|---|
-| Python venv aanmaken | Agent | `python -m venv` in project dir |
-| Dependencies installeren | Agent | `pip install -r requirements.txt` |
-| Config file genereren | Agent | Schrijft `config.json` met juiste proxy URL + key |
-| Mod directory structuur | Agent | Maakt alle mappen + `.c` files |
-| gproj.conf schrijven | Agent | Correcte mod metadata |
-| Test scripts schrijven | Agent | `test_client.py` voor standalone testen |
-| Launch parameter docs | Agent | Documentatie in README |
-| Error logs lezen | Agent | Goose kan `bridge.log` inlezen bij problemen |
+| Create Python venv | Agent | `python -m venv` in project dir |
+| Install dependencies | Agent | `pip install -r requirements.txt` |
+| Generate config file | Agent | writes `config.json` from `config.example.json` with correct proxy URL + key |
+| Mod directory structure | Agent | creates all folders + `.c` files + `addon.gproj` |
+| Write test scripts | Agent | `test_client.py` for standalone testing |
+| Launch parameter docs | Agent | documentation in README/MOD_SETUP |
+| Read error logs | Agent | Goose reads `bridge.log` / `console.log` when problems occur |
 
-Dingen die de operator **WEL zelf moet doen**:
+Things the operator DOES have to do:
 
-| Taak | Waarom |
+| Task | Why |
 |---|---|
-| Game starten via `launch_reforger.bat` | Game draait niet in goose's procesruimte |
-| Microfoon toets indrukken (PTT) | Fysieke hardware interactie |
-| In-game scenario laden | Game UI interactie |
-| Proxy/llama-server draaiend houden | Externe machine (`192.168.1.35`) |
+| Start the game via `launch_reforger.bat` | the game does not run inside goose's process space |
+| Press the microphone key (PTT) | physical hardware interaction |
+| Load an in-game scenario | game UI interaction |
+| Keep proxy/llama-server running | external machine (`192.168.1.35`) |
 
 ---
 
-## 6. DELIVERABLES PER FASE
+## 6. DELIVERABLES PER PHASE
 
-### Fase 1 Deliverables
-| # | Bestand | Beschrijving |
+### Phase 1 Deliverables
+| # | File | Description |
 |---|---|---|
-| 1 | `python_bridge/main.py` | FastAPI server met /health, /sitrep, /command endpoints |
-| 2 | `python_bridge/config.json` | Centrale configuratie |
+| 1 | `python_bridge/main.py` | FastAPI server with /health, /sitrep, /command endpoints |
+| 2 | `python_bridge/config.json` | Central configuration (gitignored; template `config.example.json`) |
 | 3 | `python_bridge/requirements.txt` | Python dependencies |
-| 4 | `python_bridge/test_client.py` | Standalone test script (zonder game) |
-| 5 | `reforger_mod/Scripts/Game/LLMBridge.c` | Enforce Script REST bridge + AI control |
-| 6 | `reforger_mod/gproj.conf` | Mod project config |
-| 7 | `README.md` | Installatie & gebruik instructies |
+| 4 | `python_bridge/test_client.py` | Standalone test script (no game needed) |
+| 5 | `reforger_mod/addons/ReforgerLLMSquad/Scripts/Game/LLMBridge.c` | Enforce Script REST bridge + AI control |
+| 6 | `reforger_mod/addons/ReforgerLLMSquad/addon.gproj` | Mod project file (own GUID) |
+| 7 | `README.md` | Install & usage instructions |
 
-### Fase 2 Deliverables
-| # | Bestand | Beschrijving |
+### Phase 2 Deliverables
+| # | File | Description |
 |---|---|---|
 | 8 | `python_bridge/voice_handler.py` | Whisper STT + PTT listener |
-| 9 | Update `python_bridge/main.py` | Voeg `/voice` endpoint toe |
-| 10 | Update `python_bridge/config.json` | Voice settings geactiveerd |
+| 9 | Update `python_bridge/main.py` | add `/voice` endpoint |
+| 10 | Update `python_bridge/config.json` | voice settings activated |
 | 11 | Update `python_bridge/requirements.txt` | faster-whisper, sounddevice deps |
 
 ---
 
 ## 7. TECHNICAL DECISIONS
 
-### 7.1 Model Keuze
-- **Fase 1**: `llama3` (3B) — 335ms latency, function calling bevestigd. Snel genoeg voor real-time squad control.
-- **Fase 2**: Mogelijk upgrade naar `qwen3.6-35b-fast` voor complexere spraakinterpretatie, met `llama3` als fallback voor snelheid.
-- **Configurabel**: Model staat in `config.json`, operator kan wijzigen zonder code aan te passen.
+### 7.1 Model Choice
+- **Phase 1**: `llama3` (3B) — 335ms latency, function calling confirmed. Fast enough for real-time squad control.
+- **Phase 2**: possible upgrade to `qwen3.6-35b-fast` for more complex speech interpretation, with `llama3` as speed fallback.
+- **Configurable**: model is set in `config.json`; the operator can change it without touching code.
 
 ### 7.2 Function Calling vs JSON Mode
-- **Voorkeur**: Function calling (`tools` + `tool_choice`) — gegarandeerde structured output, geen parsing nodig.
-- **Fallback**: Als function calling faalt bij een specifiek model,切换 naar `response_format: json_object` met strikte system prompt.
-- **Getest**: `llama3` met function calling werkt en retourneert correcte `tool_calls` in 335ms.
+- **Preference**: function calling (`tools` + `tool_choice`) — guaranteed structured output, no parsing needed.
+- **Fallback**: if function calling fails for a specific model, switch to `response_format: json_object` with a strict system prompt.
+- **Tested**: `llama3` with function calling works and returns correct `tool_calls` in 335ms.
 
-### 7.3 Mod Loading Mechanisme
-- Zonder Workbench/Steam wordt de mod geladen als **unpacked addon directory**.
-- Reforger kent GEEN `-mod`; lokale mods laden via `-addonsDir <pad>` + `-addons <GUID>` (wiki: Arma_Reforger:Startup_Parameters).
-- De game compileert `.c` bestanden bij runtime vanuit de mod directory.
-- Structuur: mod directory moet `Scripts/Game/` bevatten met de `.c` bestanden, plus een `gproj.conf` of addon metadata.
+### 7.3 Mod Loading Mechanism
+- The mod loads as an **unpacked addon directory** (no Workshop).
+- Reforger has NO `-mod`; local mods load via `-addonsDir <path>` + `-addons <GUID>` (wiki: Arma_Reforger:Startup_Parameters).
+- The game compiles `.c` files at runtime from the mod directory.
+- Structure: the mod folder must contain `addon.gproj` plus `Scripts/Game/` with the `.c` files.
 
-### 7.4 Enforce Script Constraints (geleerd uit SampleMods)
-- Classes gebruiken `modded class` syntax voor het uitbreiden van bestaande game classes.
-- Components erven van `SCR_BaseGameModeComponent` of `ScriptComponent`.
-- `RestContext` en `RestCallback` zijn native Enfusion classes voor HTTP.
-- `AIWaypoint` wordt gespawnd via `GetGame().SpawnEntityPrefab()`.
-- `SCR_AIGroup` is de container voor AI squad units.
-- `Print()` voor logging (verschijnt in game `.log` bestand).
-- Geen `throw` — Enforce Script heeft geen exception handling. Alles via return codes en null checks.
+### 7.4 Enforce Script Constraints (learned from SampleMods + the 2026-08-07 session)
+- Use `modded class` syntax to extend existing game classes.
+- Components derive from `SCR_BaseGameModeComponent` or `ScriptComponent`.
+- `RestContext` and `RestCallback` are native Enfusion classes for HTTP — via
+  `GetGame().GetRestApi().GetContext(url)`; never `ref RestContext` (private destructor).
+- No `World.GetGameTime()` — accumulate your own time via `timeslice`.
+- `SCR_AIGroup` is the container for AI squad units.
+- `Print()` for logging (appears in the game `.log` file).
+- No `throw` — Enforce Script has no exception handling. Everything via return codes and null checks.
+- Full rules: `docs/skills/enforce-script.md`.
 
 ---
 
 ## 8. RISKS & MITIGATIONS
 
-| Risico | Impact | Mitigatie |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| Enforce Script API niet volledig gedocumenteerd | Code compileert niet in game | Failsafe: mod laadt in passive mode als script errors bevat. Logs worden door Goose gelezen voor debugging. |
-| Mod loading werkt niet zonder Workbench | Mod wordt niet geladen door game | Alternatief: handmatig `.pak` packing工具 onderzoeken, of scripts direct in game `addons/` directory plaatsen. |
-| LLM hallucineert ongeldig grid/actie | Squad doet ongewenste acties | JSON schema enforcement via function calling. Python valideert action/grid enums. Onbekende grid = HOLD fallback. |
-| Proxy machine uitvalt | Geen LLM responses | Passive mode, HOLD fallback, auto-retry elke 30s |
-| Latency te hoog voor real-time control | Squad reageert traag | `llama3` (3B) als primair model — 335ms getest. SITREP interval configureerbaar. |
-| Game update breekt mod API | Script compileert niet | Mod gebruikt `modded class` overrides die redelijk robuust zijn tegen minor updates. Logs geven compile errors. |
+| Enforce Script API not fully documented | code does not compile in game | Failsafe: mod loads in passive mode on script errors. Goose reads logs for debugging. |
+| Mod loading fails without Workbench | mod not loaded by game | Verified working 2026-08-07 via `-addonsDir`/`-addons` + correct working dir. |
+| LLM hallucinates invalid grid/action | squad performs unwanted actions | JSON schema enforcement via function calling. Python validates action/grid enums. Unknown grid = HOLD fallback. |
+| Proxy machine goes down | no LLM responses | Passive mode, HOLD fallback, auto-retry every 30s |
+| Latency too high for real-time control | squad reacts slowly | `llama3` (3B) as primary model — 335ms tested. SITREP interval configurable. |
+| Game update breaks mod API | script does not compile | Mod uses `modded class` overrides, fairly robust against minor updates. Logs show compile errors. |
 
 ---
 
 ## 9. EXECUTION TIMELINE
 
-### Dit Weekend (Fase 1 volledig)
-1. **Agent schrijft alle Fase 1 deliverables** (main.py, config.json, requirements.txt, test_client.py, LLMBridge.c, gproj.conf, README.md)
-2. **Agent creëert Python venv** en installeert dependencies
-3. **Agent runt standalone test** (test_client.py) om LLM pipeline te valideren
-4. **Operator start game** via `launch_reforger.bat`
-5. **Operator & agent valideren** in-game dat SITREP bridge werkt
+### This Weekend (Phase 1 complete)
+1. **Agent writes all Phase 1 deliverables** (main.py, config.json, requirements.txt, test_client.py, LLMBridge.c, addon.gproj, README.md)
+2. **Agent creates Python venv** and installs dependencies
+3. **Agent runs standalone test** (test_client.py) to validate the LLM pipeline
+4. **Operator starts the game** via `launch_reforger.bat`
+5. **Operator & agent validate** in-game that the SITREP bridge works
 
-### Volgende Week (Fase 2)
-1. Agent installeert `faster-whisper` + `sounddevice`
-2. Agent schrijft `voice_handler.py`
-3. Operator test voice pipeline
+### Next Week (Phase 2)
+1. Agent installs `faster-whisper` + `sounddevice`
+2. Agent writes `voice_handler.py`
+3. Operator tests the voice pipeline
 
-### Daarna (Fase 3, optioneel)
-1. TTS engine selectie en integratie
+### After That (Phase 3, optional)
+1. TTS engine selection and integration
 2. Audio playback in game
 
 ---
 
 ## 10. APPROVAL
 
-**Operator**: Lees dit plan door. Als je akkoord gaat, zeg "go" en ik bouw Fase 1 volledig uit — alle bestanden, venv, dependencies, en standalone test.
+**Operator**: read this plan. If you agree, say "go" and I will build out Phase 1 completely —
+all files, venv, dependencies, and the standalone test.
 
-Als je wijzigingen wilt, markeer ze en ik pas het plan aan voordat ik bouw.
+If you want changes, mark them and I will adjust the plan before building.
