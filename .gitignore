@@ -4,6 +4,9 @@ python_bridge/__pycache__/
 python_bridge/bridge.log
 *.pyc
 
+# Secrets/config — template: python_bridge/config.example.json
+python_bridge/config.json
+
 # Bohemia SampleMods referentie (third-party!) - haal zelf op via
 # https://github.com/BohemiaInteractive/Arma-Reforger-Samples
 docs/

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Guard: sync-kopieen moeten in sync zijn met AGENTS.md.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+for f in CLAUDE.md .goosehints; do
+  if [ -f "$f" ]; then
+    diff -q AGENTS.md "$f" >/dev/null || { echo "ERROR: $f out of sync met AGENTS.md - run scripts/sync-agent-docs"; exit 1; }
+  fi
+done

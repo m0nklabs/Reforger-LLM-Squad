@@ -115,7 +115,7 @@ class LLMBridge
 	//------------------------------------------------------------------------------------------------
 	void LLMBridge()
 	{
-		m_sPythonBridgeURL = "http://127.0.0.1:5000";
+		m_sPythonBridgeURL = "http://127.0.0.1:5001"; // moet matchen met python_bridge/config.json
 		m_sLLMModel = "llama3";
 		m_fLLMTimeout = 3.0;
 		m_fSITREPInterval = 10.0;

@@ -4,8 +4,8 @@
     "port": 5001
   },
   "llm": {
-    "base_url": "http://192.168.1.35:11434/v1",
-    "api_key": "goosedesktop_dc85e569751041ef9e1a2576fa2c2553",
+    "base_url": "http://<LLM-PROXY-HOST>:11434/v1",
+    "api_key": "<PLAATS_HIER_JE_API_KEY>",
     "model": "llama3",
     "timeout_seconds": 10,
     "max_tokens": 300
