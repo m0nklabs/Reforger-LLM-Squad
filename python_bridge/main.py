@@ -122,7 +122,9 @@ app_state = {
     "last_sitrep": None,
     "health_check_time": time.time(),
     "llm_calls": 0,
-    "errors": 0
+    "errors": 0,
+    "last_status": None,
+    "last_waypoint": None
 }
 
 # --- API Functions ---
@@ -315,14 +317,30 @@ async def receive_text_command(request: CommandRequest):
     """Alias for /command but accepts text payload"""
     return await receive_command(request)
 
+@app.post("/status")
+async def receive_status(status: dict = None):
+    """Receive status update from Reforger - POST version to match LLMBridge.c"""
+    if status:
+        logger.info(f"Status update from game: {status}")
+        app_state["last_status"] = status
+    return {"status": "ok", "timestamp": time.time()}
+
 @app.get("/status")
 async def get_status():
     """Get current bridge status"""
     return {
         "state": app_state,
-        "config": CONFIG,
+        "config": "Loaded",  # Don't expose config details (contains API key)
         "last_sitrep": app_state["last_sitrep"].dict() if app_state["last_sitrep"] else None
     }
+
+@app.post("/waypoint")
+async def receive_waypoint(waypoint: dict = None):
+    """Receive waypoint creation notification from Reforger"""
+    if waypoint:
+        logger.info(f"Waypoint created: {waypoint}")
+        app_state["last_waypoint"] = waypoint
+    return {"status": "ok", "timestamp": time.time()}
 
 if __name__ == "__main__":
     import uvicorn
