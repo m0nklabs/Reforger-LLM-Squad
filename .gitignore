@@ -9,7 +9,10 @@ python_bridge/config.json
 
 # Bohemia SampleMods referentie (third-party!) - haal zelf op via
 # https://github.com/BohemiaInteractive/Arma-Reforger-Samples
-docs/
+# NB: docs/skills/ (eigen documentatie) wordt WEL getrackt
+docs/SampleMod_*/
+docs/LICENSE
+docs/README.md
 
 # Lokale deprecated rommel (oudere foutieve mod-structuur)
 reforger_mod/_deprecated/
