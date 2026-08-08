@@ -1,5 +1,6 @@
-// SCR_BaseGameMode_Component.c - Component to wire LLMBridge into the game
+// SCR_BaseGameMode_Component.c - Component to wire LLMBridge + AutoConnect into the game
 // Phase 1.2: Component wiring
+// Phase 1.x: Auto-connect to dedicated server via profile JSON ($profile:agent_auto_connect.json)
 //
 // Pattern from SampleMod_ModdedScript: use 'modded class' to extend existing classes
 // This extends SCR_BaseGameMode to instantiate LLMBridge and call Update periodically
@@ -18,6 +19,9 @@ modded class SCR_BaseGameMode
     ref LLMBridge m_pLLMBridge;
     bool m_bLLMInitialized;
     float m_fGameTime;
+
+    // Auto-connect component
+    ref LLMAutoConnect m_pAutoConnect;
 
     //------------------------------------------------------------------------------------------------
     override void OnGameStart()
@@ -45,6 +49,12 @@ modded class SCR_BaseGameMode
         {
             Print("[LLMGameMode] ERROR: Failed to create LLMBridge instance");
         }
+
+        // --- Auto-connect hook (F1.x: auto server connection via profile JSON) ---
+        // Delayed to let BackendApi / authentication initialize before we call GetBackendApi()
+        m_pAutoConnect = new LLMAutoConnect();
+        GetGame().GetCallqueue().CallLater(DeferredAutoConnect, 3000, false);
+        Print("[LLMGameMode] Auto-connect scheduled (3s delay)");
     }
 
     //------------------------------------------------------------------------------------------------
@@ -61,16 +71,36 @@ modded class SCR_BaseGameMode
     }
 
     //------------------------------------------------------------------------------------------------
+    void DeferredAutoConnect()
+    {
+        if (m_pAutoConnect)
+        {
+            Print("[LLMGameMode] Deferred auto-connect starting...");
+            m_pAutoConnect.CheckAndConnect();
+        }
+        else
+        {
+            Print("[LLMGameMode] ERROR: m_pAutoConnect is null in DeferredAutoConnect");
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
     override void OnGameEnd()
     {
         Print("[LLMGameMode] OnGameEnd - Shutting down LLM Bridge");
         
         // Stop periodic updates
         GetGame().GetCallqueue().Remove(PeriodicUpdate);
+        GetGame().GetCallqueue().Remove(DeferredAutoConnect);
         
         if (m_pLLMBridge)
         {
             m_pLLMBridge = null;
+        }
+        
+        if (m_pAutoConnect)
+        {
+            m_pAutoConnect = null;
         }
         
         m_bLLMInitialized = false;

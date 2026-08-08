@@ -1,0 +1,31 @@
+{
+    "bindAddress": "0.0.0.0",
+    "bindPort": 2001,
+    "publicAddress": "local",
+    "publicPort": 2001,
+    "game": {
+        "name": "LLMSquadDevServer",
+        "scenarioId": "{ECC61978EDCC2B5A}Missions/23_Campaign.conf",
+        "visible": true,
+        "password": "",
+        "passwordAdmin": "llmsquad",
+        "maxPlayers": 16,
+        "mods": [
+            {
+                "modId": "66354C398328E4B0",
+                "name": "EE_Dynamic AI Spawner",
+                "version": "1.0.17"
+            }
+        ]
+    },
+    "rcon": {
+        "address": "0.0.0.0",
+        "port": 19999,
+        "password": "llmsquad",
+        "permission": "admin",
+        "maxClients": 4
+    },
+    "operating": {
+        "lobbyPlayerSynchronise": true
+    }
+}
