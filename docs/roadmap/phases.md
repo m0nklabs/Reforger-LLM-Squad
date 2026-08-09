@@ -18,7 +18,7 @@ Phase 1: MVP — Auto Squad          Phase 2: Tactical C2
 │ F0  ✓ Mod loads         │        │ F2.1 WorldState reporter│
 │ F1.1 ✓ Game to menu     │───────▶│ F2.2 LLM tactical router│
 │ F1.2 Auto-squad spawn   │        │ F2.3 Waypoint execution │
-│ F1.3 Route sync         │        │ F2.4 Rank + faction     │
+│ F1.3 Route sync         │ ✅     │ F2.4 Rank + faction     │
 └─────────┬───────────────┘        └─────────┬───────────────┘
           │                                  │
           ▼                                  ▼
@@ -75,7 +75,13 @@ assign the player as squad leader. Bridge communication established.
 3. **`SCR_AIGroup.IsFull()` does NOT exist** — use `GetPlayerAndAgentCount()` vs `GetMaxMembers()`
 4. **5s delay needed** — faction assignment + group init not ready at spawn time; 3s was too short
 
-### F1.3: Route sync + e2e validation — 🔲 TODO
+### F1.3: Route sync + e2e validation — ✅ DONE (2026-08-09)
+
+Two critical REST API bugs fixed:
+1. RestCallback GC: inline callback objects were GC'd before async response → callbacks never fired. Fix: store in `ref array<ref RestCallback>`.
+2. POST body empty: `POST(cb, path, body)` sends HTTP but body never arrives at server. Fix: send via `GET ?data=<urlencoded_json>`.
+
+E2E verified: game sends SITREP → bridge parses → LLM processes → response callback fires in game.
 
 | Task | Status | Dependencies |
 |---|---|---|
@@ -241,7 +247,7 @@ spawns OPFOR groups, sets waypoints.
 | F0 | Mod loads, compiles | ✅ DONE | 1 |
 | F1.1 | Game reaches main menu | ✅ DONE | 1 |
 | F1.2 | Auto-squad spawning | ✅ DONE | 1 |
-| F1.3 | Route sync, e2e validation | 🔲 NEXT | 1 |
+| F1.3 | Route sync, e2e validation | ✅ DONE | 1 |
 | F2.1 | WorldState reporter | 🔲 TODO | 2 |
 | F2.2 | LLM tactical router | 🔲 TODO | 2 |
 | F2.3 | Waypoint execution | 🔲 TODO | 2 |
