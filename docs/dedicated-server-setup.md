@@ -1,77 +1,98 @@
 # Dedicated Server Setup — Arma Reforger LLM Squad
 
-## Status: PARTIALLY WORKING (2026-08-09)
+## Status: WORKING (2026-08-09 21:28)
 
-- ✅ Vanilla DS starts and listens (RPL:2001, RCON:19999)
-- ✅ Correct scenarioId found: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf`
-- ✅ Mod compiles on DS (5637 files with `-addons` flag)
-- ❌ Local mod NOT loaded without `-addons` flag (5633 = vanilla)
-- ❌ `-config` + `-addons` cannot be combined (hard DS check)
-- ❌ `game.mods[]` triggers Steam Workshop validation
-- ❌ `-world` without `-config` hangs on "Attempting online Game Config"
+- ✅ DS starts with mod loaded (5637 files)
+- ✅ Mod downloaded from BI Workshop via `game.mods[]`
+- ✅ Scripts compile and execute on DS (LLMBridge, LLMGameMode, AutoSquad)
+- ✅ RPL:2001, RCON:19999, A2S:17777 all active
+- ✅ LLM bridge connects to Python bridge on port 5001
+- ✅ SITREP + LLM action processing works on DS
 
-## Summary table
+## Prerequisites
 
-| Approach | Mod loads? | Server starts? | Notes |
-|----------|-----------|---------------|-------|
-| `-config` alone | ❌ 5633 files | ✅ Yes | Mod in addons folder, "Available" but not "Loaded" |
-| `-config` + `-addons` + `-addonsDir` | ✅ 5637 files | ❌ No | "config cannot be used together with addons!" |
-| `-world` + `-addons` + `-addonsDir` | ✅ 5637 files | ❌ No | Hangs on "Attempting online Game Config" |
-| `-world` + `-addons` + `-addonsDir` + `-backendDisableStorage` | ✅ 5637 files | ❌ No | Still hangs on "Attempting online Game Config" |
-| `-config` + `-addonsDir` (no `-addons`) | ❌ 5633 files | ✅ Yes | Same as `-config` alone |
+1. **Mod published to BI Workshop** (even as unlisted) via Arma Reforger Workbench
+2. **Python bridge running** on the same machine (port 5001)
+3. **server.json** in DS directory with `game.mods[]` containing the addon GUID
 
-## Root cause
+## Solution: `game.mods[]` with addon GUID
 
-The DS (build 190965, v1.7.0.54) has a **hard-coded check** that prevents
-`-config` + `-addons` from being used together. The BI wiki claims they
-can be combined, but this is outdated for the current version.
+The `modId` in `game.mods[]` IS the 16-char hex GUID from `addon.gproj` (NOT a Steam numeric ID).
+Reforger uses BI's own Workshop at `reforger.armaplatform.com`, not Steam's `publishedfileid`.
 
-The DS loads addons differently from the game client:
-- Game client: loads unpacked mods via `-addonsDir` + `-addons`
-- DS: only loads addons with `.pak` files + `resourceDatabase.rdb` as base addons
-- DS with `-addons` flag: compiles loose scripts (5637 files) but then rejects `-config`
+### server.json
+```json
+{
+    "bindAddress": "0.0.0.0",
+    "a2s": { "address": "0.0.0.0", "port": 17777 },
+    "rcon": { "address": "0.0.0.0", "port": 19999, "password": "llmadmin" },
+    "game": {
+        "name": "LLM Squad Test Server",
+        "password": "",
+        "scenarioId": "{ECC61978EDCC2B5A}Missions/23_Campaign.conf",
+        "maxPlayers": 10,
+        "mods": [
+            { "modId": "7E5A1C9B3D8F2406", "name": "Reforger LLM Squad Control" }
+        ]
+    }
+}
+```
 
-## Two paths forward
+### Launch command
+```bat
+ArmaReforgerServer.exe -config server.json -nographics -logLevel normal
+```
 
-### Path A — Pack the mod (recommended for local development)
-1. Use Arma Reforger Workbench to pack the mod into a `.pak` file
-2. Generate `resourceDatabase.rdb` for the mod
-3. Place `.pak` + `.rdb` + `addon.gproj` in DS addons folder
-4. DS will load it as a base addon (no `-addons` flag needed, no workshop validation)
-5. Use `-config` alone — server starts with mod loaded
+Or use `launch_ds.bat` from the repo root.
 
-### Path B — Publish to Steam Workshop (for production/multiplayer)
-1. Use Workbench to publish mod as unlisted workshop item
-2. Add workshop ID to `game.mods[]` in `server.json`
-3. Use `-config` alone — DS downloads mod from workshop and starts
+## DS startup flow (verified 2026-08-09)
 
-## Files
+1. DS starts, loads vanilla (5633 files, core + data)
+2. DS reads `game.mods[]`, finds modId `7E5A1C9B3D8F2406`
+3. DS contacts BI Workshop, downloads mod (`.pak` + `resourceDatabase.rdb`)
+4. DS reloads with mod (5637 files — 4 extra = our scripts)
+5. Scripts compile: `LLMBridge.c`, `AutoSquadManager.c`, `SCR_BaseGameMode_Component.c`
+6. `[LLMGameMode] EOnInit FIRED — modded SCR_BaseGameMode is alive`
+7. `[LLMGameMode] OnGameStart - Initializing LLM Bridge`
+8. RPL server listens on 0.0.0.0:2001
+9. RCON listens on 0.0.0.0:19999
+10. `[LLMBridge] Bridge healthy, LLM mode active`
+11. `[LLMBridge] SITREP sent` — periodic updates to Python bridge
 
-- `launch_ds.bat` — DS launcher (syncs mod + starts server)
-- `server.example.json` — Server config template (copy to DS dir)
-- DS install: `Q:\SteamLibrary\steamapps\common\Arma Reforger Server\`
+## What does NOT work
 
-## DS vs Game Client comparison
+| Approach | Result |
+|----------|--------|
+| `-config` + `-addons` + `-addonsDir` | ❌ "config cannot be used together with addons!" |
+| `-world` + `-addons` + `-addonsDir` | ❌ Hangs on "Attempting online Game Config" |
+| `-config` + `-addonsDir` (no `-addons`) | ❌ 5633 files, mod "Available" but not "Loaded" |
+| Packed `.pak` in DS addons folder | ❌ "Available" but not "Loaded" (DS only loads core+data as base) |
+| `game.mods[]` with GUID (before publishing) | ❌ "Addon was not found on workshop" |
+| **`game.mods[]` with GUID (after publishing)** | **✅ WORKS!** |
 
-| Feature | Game Client | Dedicated Server |
-|---------|------------|-----------------|
-| Mod loading | `-addonsDir` + `-addons` | `.pak` + `resourceDatabase.rdb` OR `game.mods[]` (workshop) |
-| Scenario | In-game menu selection | `scenarioId` in config |
-| `-config` | N/A | Required for network/RCON settings |
-| `-addons` | Works with `-addonsDir` | Cannot be combined with `-config` |
-| Unpacked mods | ✅ Supported | ❌ Not loaded (only "Available", not "Loaded") |
-| `-autoStartScenario` | ❌ DS only | ✅ Works |
-| `game.mods[]` | N/A | Triggers workshop validation |
-| Backend | Optional | Required (or `-backendDisableStorage`) |
+## Publishing mod to BI Workshop
+
+1. Open Arma Reforger Workbench (`ArmaReforgerWorkbenchSteamDiag.exe`)
+2. Load the mod project (`addon.gproj`)
+3. Set workshop metadata (name, description, tags, unlisted=true)
+4. Package + Publish
+5. Output in `%LOCALAPPDATA%\Temp\Arma Reforger Workbench\Publishing\<GUID>\`:
+   - `data.pak`, `resourceDatabase.rdb`, `addon.gproj`, `manifest.json`
+6. Verify at `https://reforger.armaplatform.com/workshop/7E5A1C9B3D8F2406`
+
+## DS port reference
+- **RPL**: 2001 (game network)
+- **RCON**: 19999 (admin, password: `llmadmin`)
+- **A2S**: 17777 (Steam query)
+
+## DS install location
+`Q:\SteamLibrary\steamapps\common\Arma Reforger Server\`
 
 ## Key scenario IDs
-
 | Scenario | scenarioId |
 |----------|-----------|
 | CTI Campaign Eden | `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` |
 | CombatOps Eden | `{58D0FB3206B6F859}Configs/Scenarios/CombatOps_Eden/Journal_CO_Eden.conf` |
 
-## DS port reference
-- **RPL**: 2001 (game network)
-- **RCON**: 19999 (admin)
-- **A2S**: 17777 (Steam query)
+## Connecting to the DS
+From the game client: Multiplayer → Server Browser → Direct Connect → `127.0.0.1:2001`

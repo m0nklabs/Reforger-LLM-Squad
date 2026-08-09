@@ -54,14 +54,16 @@ Never invent these — every single one has already gone wrong once:
 3. **Port sync**: bridge runs on **5001** (config.json, bats, LLMBridge default URL).
 4. **Never commit secrets.** `config.json` (API key) is gitignored + pre-commit blocked; only commit `config.example.json`. Docs must never contain the API key.
 5. Never change the GUID in `addon.gproj` (pre-commit hook blocks this).
-6. **Dedicated server vs listen server (2026-08-09, UPDATED 2026-08-09)**: The DS (`ArmaReforgerServer.exe`) CANNOT load local unpacked mods. **Comprehensive testing results:**
-   - `-config` + `-addons` = **REJECTED** by hard DS check ("config cannot be used together with addons!") even with `-addonsDir`. BI wiki claims they can be combined but this is outdated for build 190965.
+6. **Dedicated server vs listen server (2026-08-09, BREAKTHROUGH)**: The DS (`ArmaReforgerServer.exe`) CAN load mods published to the BI Workshop. **Final working solution:**
+   - **`game.mods[]` with the addon GUID** = the `modId` IS the 16-char hex GUID from `addon.gproj` (NOT a Steam numeric ID). Reforger uses BI's own Workshop, not Steam's `publishedfileid`.
+   - **DS workflow**: starts vanilla (5633 files) → downloads mod from BI Workshop → reloads with mod (5637 files) → scripts compile + execute → server listens (RPL:2001, RCON:19999).
+   - **Prerequisite**: mod MUST be published to BI Workshop (even as unlisted) via Workbench. Before publishing, `game.mods[]` fails with "Addon was not found on workshop".
+   - `-config` + `-addons` = **REJECTED** by hard DS check ("config cannot be used together with addons!"). Even with `-addonsDir`. BI wiki is outdated for build 190965.
    - `-world` + `-addons` + `-addonsDir` = mod compiles (5637 files) but DS hangs on "Attempting online Game Config" (no server config).
-   - `game.mods[]` = triggers Steam Workshop validation ("Addon was not found on workshop").
-   - `-config` + `-addonsDir` (no `-addons`) = server starts but mod NOT loaded (5633 = vanilla). DS only loads addons with `.pak` + `resourceDatabase.rdb`.
-   - **Solutions**: (A) Pack mod as `.pak` + `resourceDatabase.rdb` via Workbench → loads as base addon. (B) Publish to Workshop as unlisted → use `game.mods[]`.
-   - **Correct scenarioId**: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` (found via game client log: `PlayGameConfig {Resource: {ECC61978EDCC2B5A}Missions/23_Campaign.conf}`)
+   - Packed `.pak` + `resourceDatabase.rdb` in DS addons folder = "Available" but NOT "Loaded" (DS only loads core+data as base addons).
+   - **Correct scenarioId**: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` (found via game client log: `PlayGameConfig`)
    - DS ports: RPL=2001, RCON=19999, A2S=17777. Full docs: `docs/dedicated-server-setup.md`.
+   - **Workbench publishing**: `ArmaReforgerWorkbenchSteamDiag.exe` in `Q:\SteamLibrary\steamapps\common\Arma Reforger Tools\Workbench\`. Output: `.pak` + `resourceDatabase.rdb` + `manifest.json` in `%LOCALAPPDATA%\Temp\Arma Reforger Workbench\Publishing\<GUID>\`.
 7. **Play (offline) vs Host (multiplayer) — CRITICAL (2026-08-09)**: When you click **Host** in the scenario menu, the game DESTROYS the first instance and creates a NEW one — WITHOUT loading local mods (5633 = vanilla). When you click **Play** (offline/single-player), the game stays in the SAME instance (5637 = mod loaded). **For mod testing, ALWAYS use Play, not Host.** The modded classes only execute in the Play (offline) path.
 8. **Packed vs unpacked mods (2026-08-09)**: Unpacked mods (loose `.c` files + `addon.gproj`) work correctly for script execution. Packed `.pak` files are recognized (`(packed)` in log) but **do not load modded classes at runtime** — the scripts compile but `Print()` output never appears. Use unpacked for development; packed only for workshop publishing.
 9. **Cached workshop mods (2026-08-09)**: If the user previously joined a community server, 100+ workshop mods may be cached in `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\`. These cause `ADDON_LOAD_ERROR` when starting a scenario. Fix: move them to `addons_disabled/` subfolder. Our mod in `-addonsDir` is separate and unaffected.
@@ -120,13 +122,19 @@ Never invent these — every single one has already gone wrong once:
   - `AIFormationComponent.SetFormation("Column")` for squad movement
   - Live orders: spawn, hold, move, status, despawn, formation, follow
   - LLM: qwen3.6-35b-uncensored (switched from llama3)
-- ✅ DS investigation (2026-08-09 21:00):
+- ✅ DS investigation (2026-08-09 21:30):
   - DS installed: `Q:\SteamLibrary\steamapps\common\Arma Reforger Server\`
   - Correct scenarioId: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf`
   - Vanilla DS starts: RPL:2001, RCON:19999, A2S:17777
   - `-config` + `-addons` CANNOT be combined (hard DS check)
   - Mod compiles on DS (5637 files) but needs `.pak` or workshop for loading
   - Full docs: `docs/dedicated-server-setup.md`
+- ✅ **DS WITH MOD WORKING (2026-08-09 21:28)**:
+  - Mod published to BI Workshop via Workbench (unlisted)
+  - `game.mods[]` with GUID `7E5A1C9B3D8F2406` = modId IS the addon GUID (NOT Steam numeric ID)
+  - DS downloads mod from BI Workshop → 5637 files → scripts compile + execute
+  - `[LLMGameMode] OnGameStart` + `[LLMBridge] Bridge healthy` + SITREP sent on DS!
+  - RPL:2001, RCON:19999, A2S:17777 all active with mod loaded
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References
