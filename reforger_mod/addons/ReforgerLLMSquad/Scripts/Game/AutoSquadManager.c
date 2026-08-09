@@ -174,7 +174,15 @@ modded class SCR_AIWorld
 			return;
 		}
 
-		Print("[AutoSquad] LiveManual: Using prefab " + usedPrefab);
+		// Ensure slave group exists and get it
+		SCR_AIGroup slaveGroup = EnsureSlaveGroup(grp);
+		if (!slaveGroup)
+		{
+			Print("[AutoSquad] LiveManual: Failed to create slave group! Cannot add AI.");
+			return;
+		}
+
+		Print("[AutoSquad] LiveManual: Using slave group: " + slaveGroup);
 
 		for (int i = 0; i < 5; i++)
 		{
@@ -189,35 +197,29 @@ modded class SCR_AIWorld
 			IEntity aiEnt = GetGame().SpawnEntityPrefabEx(usedPrefab, true, GetGame().GetWorld(), sp);
 			if (!aiEnt) { Print("[AutoSquad] LiveManual: failed to spawn entity #" + i); continue; }
 
-			// Use AddAIEntityToGroup pattern from real SCR_AIGroup.c source:
-			// 1. Find AIControlComponent
-			// 2. Get GetControlAIAgent() (NOT GetAIAgent!)
-			// 3. Call ActivateAI()
-			// 4. AddAgent if no parent group yet
+			// Use AddAgentFromControlledEntity pattern:
+			// This is the vanilla pattern from SCR_PlayerControllerGroupComponent.AddAIToSlaveGroup()
 			AIControlComponent aiCtrl = AIControlComponent.Cast(aiEnt.FindComponent(AIControlComponent));
 			if (!aiCtrl) { Print("[AutoSquad] LiveManual: no AIControlComponent on #" + i); continue; }
 
-			AIAgent agent = aiCtrl.GetControlAIAgent();
-			if (!agent) { Print("[AutoSquad] LiveManual: no AIAgent on #" + i); continue; }
-
 			aiCtrl.ActivateAI();
 
-			if (!agent.GetParentGroup())
-				grp.AddAgent(agent);
+			// Add to SLAVE group (NOT master group!) — this is critical for MP commanding
+			slaveGroup.AddAgentFromControlledEntity(aiEnt);
 
-			Print("[AutoSquad] LiveManual: AI #" + i + " spawned and added to group at " + spawnPos);
+			Print("[AutoSquad] LiveManual: AI #" + i + " spawned and added to SLAVE group at " + spawnPos);
 		}
 
-		// Set formation so soldiers follow the leader
-		AIFormationComponent formationComp = AIFormationComponent.Cast(grp.FindComponent(AIFormationComponent));
+		// Set formation on the slave group
+		AIFormationComponent formationComp = AIFormationComponent.Cast(slaveGroup.FindComponent(AIFormationComponent));
 		if (formationComp)
 		{
 			formationComp.SetFormation("Column");
-			Print("[AutoSquad] LiveManual: formation set to Column");
+			Print("[AutoSquad] LiveManual: formation set to Column on slave group");
 		}
 		else
 		{
-			Print("[AutoSquad] LiveManual: WARNING - no AIFormationComponent on group!");
+			Print("[AutoSquad] LiveManual: WARNING - no AIFormationComponent on slave group!");
 		}
 
 		Print("[AutoSquad] LiveManual: Done, 5 AI spawned with formation");
@@ -240,6 +242,80 @@ modded class SCR_AIWorld
 		{
 			Print("[AutoSquad] SetFormation: no AIFormationComponent!");
 		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// F2.x: Ensure slave group exists for AI commanding (MP-critical!)
+	// The vanilla commanding system expects AI in a SLAVE group linked to the player's MASTER group.
+	// Without this, spawned AI cannot be commanded in multiplayer.
+	static SCR_AIGroup EnsureSlaveGroup(SCR_AIGroup masterGroup)
+	{
+		if (!masterGroup) return null;
+
+		// Check if slave group already exists
+		SCR_AIGroup existingSlave = masterGroup.GetSlave();
+		if (existingSlave)
+		{
+			Print("[AutoSquad] Slave group already exists: " + existingSlave);
+			if (!existingSlave.IsAIActivated())
+				existingSlave.ActivateAI();
+			return existingSlave;
+		}
+
+		// Create slave group using the vanilla prefab
+		SCR_CommandingManagerComponent commandingMgr = SCR_CommandingManagerComponent.GetInstance();
+		if (!commandingMgr)
+		{
+			Print("[AutoSquad] EnsureSlaveGroup: no CommandingManagerComponent!");
+			return null;
+		}
+
+		ResourceName slavePrefab = commandingMgr.GetGroupPrefab();
+		if (slavePrefab.IsEmpty())
+		{
+			Print("[AutoSquad] EnsureSlaveGroup: no slave group prefab!");
+			return null;
+		}
+
+		Resource res = Resource.Load(slavePrefab);
+		if (!res || !res.IsValid())
+		{
+			Print("[AutoSquad] EnsureSlaveGroup: failed to load slave prefab!");
+			return null;
+		}
+
+		IEntity slaveEntity = GetGame().SpawnEntityPrefab(res, GetGame().GetWorld());
+		if (!slaveEntity)
+		{
+			Print("[AutoSquad] EnsureSlaveGroup: failed to spawn slave group entity!");
+			return null;
+		}
+
+		SCR_AIGroup slaveGroup = SCR_AIGroup.Cast(slaveEntity);
+		if (!slaveGroup)
+		{
+			Print("[AutoSquad] EnsureSlaveGroup: spawned entity is not SCR_AIGroup!");
+			return null;
+		}
+
+		// Don't delete when empty (vanilla pattern)
+		slaveGroup.SetDeleteWhenEmpty(false);
+		slaveGroup.ActivateAI();
+
+		// Link slave to master via GroupsManager
+		SCR_GroupsManagerComponent groupsMgr = SCR_GroupsManagerComponent.GetInstance();
+		if (groupsMgr)
+		{
+			RplComponent masterRpl = RplComponent.Cast(masterGroup.FindComponent(RplComponent));
+			RplComponent slaveRpl = RplComponent.Cast(slaveGroup.FindComponent(RplComponent));
+			if (masterRpl && slaveRpl)
+			{
+				groupsMgr.RequestSetGroupSlave(masterRpl.Id(), slaveRpl.Id());
+				Print("[AutoSquad] Slave group created and linked to master group");
+			}
+		}
+
+		return slaveGroup;
 	}
 
 	//------------------------------------------------------------------------------------------------

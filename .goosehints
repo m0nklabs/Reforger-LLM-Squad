@@ -82,6 +82,15 @@ Never invent these — every single one has already gone wrong once:
     ```
 16. **DS scenarioId (2026-08-09)**: The scenario ID for the DS config is NOT the `.ent` world file. It is: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` (found via game client log `PlayGameConfig`).
 17. **Live orders system (2026-08-09)**: Game polls `GET /orders` every 2s. Bridge queues commands via `POST /orders`. Commands: `spawn`, `hold`, `move` (with `[dx,dz]` offset array), `status`, `despawn`, `formation`, `follow`. Enables debugging without game restart. Offset must be JSON array `[100,50]` not string `"100,50"`.
+18. **Master/Slave group architecture (2026-08-09, CRITICAL for MP)**: Arma Reforger uses a **master group** (player-facing, shown in UI) and a **slave group** (AI-facing, manages AI agents) architecture. The commanding system (`SCR_CommandingManagerComponent`) ALWAYS accesses AI through `masterGroup.GetSlave()`. Adding AI directly to the master group via `AddAgent()` does NOT work in multiplayer because:
+    - `AddAgent()` is a `proto external` C++ call with no RPL broadcast
+    - `AddAgentFromControlledEntity()` calls `OnGroupMemberStateChange()` which broadcasts via `Rpc(RPC_DoOnGroupMemberStateChange)` to clients
+    - Without this broadcast, the client never sees the AI in its group UI and cannot command them
+    - Fix: create slave group via `EnsureSlaveGroup()`, then `slaveGroup.AddAgentFromControlledEntity(aiEnt)`
+    - Slave group prefab: `{04D3B38E23F51754}Prefabs/AI/Groups/Slave_Group.et` (from `SCR_CommandingManagerComponent`)
+    - `GetAgents()` returns empty array on client when agents are remotely controlled (engine limitation); use `GetServerAgentsCount()` instead
+19. **DS server.json publicAddress (2026-08-09)**: Set `publicAddress` and `publicPort` in server.json to make the server discoverable on LAN. Without these, the server registers with its public IP (not LAN IP) and may not appear in the server browser.
+20. **DS mod loading final solution (2026-08-09, BREAKTHROUGH)**: Mod MUST be published to BI Workshop (even as unlisted). `game.mods[]` with `modId = addon GUID` (16-char hex from `addon.gproj`, NOT Steam numeric ID). DS downloads mod from BI Workshop on startup → 5637 files → scripts compile + execute. Workbench publishing: `ArmaReforgerWorkbenchSteamDiag.exe` → output in `%LOCALAPPDATA%\Temp\Arma Reforger Workbench\Publishing\<GUID>\`.
 
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
