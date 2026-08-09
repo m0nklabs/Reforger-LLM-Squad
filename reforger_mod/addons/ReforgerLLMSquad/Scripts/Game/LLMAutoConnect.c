@@ -70,7 +70,7 @@ class LLMAutoConnect
         }
 
         // --- Step 2: Load JSON config (verified API: SCR_JsonLoadContext.LoadFromFile/ReadValue) ---
-        SCR_JsonLoadContext loadContext = new SCR_JsonLoadContext();
+        JsonLoadContext loadContext = new JsonLoadContext();
         if (!loadContext.LoadFromFile(CONFIG_PATH))
         {
             Print("[LLMAutoConnect] ERROR: Failed to load config from " + CONFIG_PATH);
@@ -111,7 +111,7 @@ class LLMAutoConnect
     // Saves the config with enabled=false to prevent reboot loops
     void SaveDisabledConfig()
     {
-        SCR_JsonSaveContext saveContext = new SCR_JsonSaveContext();
+        JsonSaveContext saveContext = new JsonSaveContext();
         saveContext.WriteValue("enabled", false);
         saveContext.WriteValue("server_ip", m_sServerIp);
         saveContext.WriteValue("server_port", m_iServerPort);

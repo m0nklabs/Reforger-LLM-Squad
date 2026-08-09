@@ -50,7 +50,7 @@ Never invent these — every single one has already gone wrong once:
 
 ## Critical rules (misc, hard-won)
 1. **Testing is empirical, always**: kill → `launch_reforger.bat` → ~50s → `check_latest_log.ps1`. Crash signature: log ≈1145 bytes. `SCRIPT (E)` in base-game `.c` files AFTER your file = cascade noise; fix YOUR first error first.
-2. **Route sync**: endpoints in `LLMBridge.c` must match `main.py` (`@app.get/post`). Known gaps: `/waypoint` missing in main.py; `/status` is GET in main.py but POST in LLMBridge (fix = F1.3).
+2. **Route sync**: endpoints in `LLMBridge.c` must match `main.py` — all 5 routes synced (F1.3 done). Game sends via GET `?data=<json>` (POST body doesn't transmit in Enforce). Endpoints: `/health`, `/sitrep`, `/command`, `/status`, `/waypoint`.
 3. **Port sync**: bridge runs on **5001** (config.json, bats, LLMBridge default URL).
 4. **Never commit secrets.** `config.json` (API key) is gitignored + pre-commit blocked; only commit `config.example.json`. Docs must never contain the API key.
 5. Never change the GUID in `addon.gproj` (pre-commit hook blocks this).
@@ -59,6 +59,8 @@ Never invent these — every single one has already gone wrong once:
 8. **Packed vs unpacked mods (2026-08-09)**: Unpacked mods (loose `.c` files + `addon.gproj`) work correctly for script execution. Packed `.pak` files are recognized (`(packed)` in log) but **do not load modded classes at runtime** — the scripts compile but `Print()` output never appears. Use unpacked for development; packed only for workshop publishing.
 9. **Cached workshop mods (2026-08-09)**: If the user previously joined a community server, 100+ workshop mods may be cached in `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\`. These cause `ADDON_LOAD_ERROR` when starting a scenario. Fix: move them to `addons_disabled/` subfolder. Our mod in `-addonsDir` is separate and unaffected.
 10. **`SCR_AIGroup.IsFull()` does NOT exist** (2026-08-09). Use `GetPlayerAndAgentCount()` vs `GetMaxMembers()` instead. Verified via Doxygen member list.
+11. **REST callback GC (2026-08-09)**: Inline `new RestCallback(...)` passed to `GET()`/`POST()` is garbage-collected before the async HTTP response arrives. Callbacks NEVER fire. Fix: store in `ref array<ref MyCallback> m_aActiveCallbacks` to keep alive. Both `SetOnSuccess` (modern) and `OnSuccess` (deprecated override) fire correctly once the callback survives GC.
+12. **POST body never transmits (2026-08-09)**: `RestContext.POST(cb, path, body)` sends the HTTP request, but the body parameter arrives empty at the server (`Content-Length: 0`). Fix: send data via GET query param (`/sitrep?data=<urlencoded_json>`). Enforce has no built-in URL encoder — write your own (see `LLMBridge.UrlEncode()`).
 
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
@@ -88,7 +90,11 @@ Never invent these — every single one has already gone wrong once:
   [LLMGameMode] OnGameStart - Initializing LLM Bridge
   [LLMBridge] LLM Bridge activated, periodic updates started
   ```
-- 🔲 F1.3: route sync game↔bridge (`/waypoint`, `/status`), e2e JSON validation
+- ✅ F1.3: route sync game↔bridge — all 5 endpoints synced (2026-08-09 14:57):
+  - Fixed REST callback GC (ref array keeps callbacks alive for async response)
+  - Fixed POST body empty (switched to GET ?data=<urlencoded_json>)
+  - E2E: game sends SITREP → bridge parses → LLM processes → response callback fires in game
+  - `m_bLLMReady = true` (health check callback fires successfully)
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References

@@ -30,32 +30,90 @@
 
 ## 3. REST API (the REAL API — wiki: Arma_Reforger:REST_API_Usage)
 
-GET and POST only. A pattern that compiles AND works:
+GET and POST only. Two critical bugs discovered F1.3 (2026-08-09):
+
+### Bug 1: Callback GC (callbacks never fire)
+
+If you create a callback inline, the Enforce GC destroys it before the async HTTP
+response arrives. The HTTP request is sent, the server returns 200, but `OnSuccess`
+and `SetOnSuccess` handlers NEVER fire.
+
+**WRONG** (callback GC'd before response):
+```cs
+ctx.GET(new MyCallback(), "/health");  // callback object has no ref → GC'd
+```
+
+**RIGHT** (callback stored in ref array):
+```cs
+class MyBridge
+{
+    ref array<ref MyCallback> m_aActiveCallbacks;  // keeps callbacks alive
+
+    protected MyCallback CreateCallback(string endpoint)
+    {
+        MyCallback cb = new MyCallback(this, endpoint);
+        m_aActiveCallbacks.Insert(cb);
+        while (m_aActiveCallbacks.Count() > 20)
+            m_aActiveCallbacks.RemoveOrdered(0);
+        return cb;
+    }
+}
+```
+
+### Bug 2: POST body is empty (body never transmits)
+
+`ctx.POST(callback, path, body)` sends the HTTP request, but the body parameter
+**never arrives** at the server. The server sees a POST with `Content-Length: 0`.
+
+**WRONG** (body never arrives):
+```cs
+ctx.POST(cb, "/sitrep", "{\"key\": \"value\"}");  // server sees empty body
+```
+
+**RIGHT** (send data via GET query param):
+```cs
+ctx.GET(cb, "/sitrep?data=" + UrlEncode(jsonString));  // server receives ?data=...
+```
+
+Enforce has no built-in URL encoder — write your own (see `LLMBridge.UrlEncode()`).
+
+### Modern callback API
+
+Both `SetOnSuccess` (modern) and `OnSuccess` (deprecated override) work once
+the callback survives GC. Using both is safe:
 
 ```cs
 class MyCallback : RestCallback
 {
-    override void OnSuccess(string data, int dataSize)
-    {
-        Print("OK: " + data);
-    }
-    override void OnError(int errorCode)
-    {
-        Print("ERROR " + errorCode);
-    }
-}
+    void MyCallback(MyBridge owner, string endpoint) { ... }
 
-// somewhere in your logic:
+    // Modern API — set in constructor
+    void MyCallback(...) {
+        SetOnSuccess(SuccessHandler);
+        SetOnError(ErrorHandler);
+    }
+
+    void SuccessHandler(RestCallback cb = null) { ... }  // RestCallbackFunc signature
+    void ErrorHandler(RestCallback cb = null) { ... }
+
+    // Deprecated overrides — also fire (obsolescence warnings expected)
+    override void OnSuccess(string data, int dataSize) { ... }
+    override void OnError(int errorCode) { ... }
+}
+```
+
+### Full working pattern
+
+```cs
 RestContext ctx = GetGame().GetRestApi().GetContext("http://127.0.0.1:5001"); // NON-ref member!
-ctx.GET(new MyCallback(), "/health");
-ctx.POST(new MyCallback(), "/sitrep", "{\"key\": \"value\"}");
+MyCallback cb = CreateCallback("/health");  // stored in ref array → survives GC
+ctx.GET(cb, "/health");                      // GET works, callbacks fire
+ctx.GET(cb, "/sitrep?data=" + UrlEncode(json));  // data via query param
 ```
 
 - `GetContext(baseUrl)` — after that, paths are relative (`/health`).
-- The `OnSuccess`/`OnError` overrides produce `obsolete` WARNINGS (not errors): the modern style is
-  `RestCallback.SetOnSuccess(...)`. Overrides still work; warnings are acceptable.
-- Creating a fresh callback per request is the common pattern.
 - WRONG pattern (invented, does not compile): `new RestContext()`, `SetURL()`, `SetMethod(RestMethod.POST)`, `.Start()`.
+- Reference: ARExplorer (arexplorer.zeroy.com) — RestCallback class, RestCallbackFunc typedef.
 
 ## 4. How to verify
 

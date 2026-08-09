@@ -1,21 +1,13 @@
 // LLMBridge.c - LLM Squad Control Bridge for Arma Reforger
 // Phase 1: REST bridge + AI squad control (no voice)
 //
-// Fixed 2026-08-07:
-//  - 'modclass' does not exist in Enforce -> 'class'
-//  - Nested classes removed (Enforce does not allow class-in-class) ->
-//    LLMSquadMember / LLMWaypoint are now file-scope (also renamed to avoid
-//    collision with the engine class 'Waypoint')
-//  - Invented REST API (new RestContext/SetMethod/Start) replaced with the real one:
-//    GetGame().GetRestApi().GetContext(baseUrl) + GET/POST + RestCallback
-//    (wiki: Arma_Reforger:REST_API_Usage)
-//  - 'override' removed: no base class. Activate()/Update() will be called (F1.2)
-//    from a GameMode component.
-//  - Ternary expressions and bool-concat removed from string building (compile-safe)
-//
-// TODO (F1.2): instantiate LLMBridge from a component (e.g. modded
-//              SCR_BaseGameMode) and call Activate()/Update().
-// TODO:        system_prompt lives server-side (python_bridge) - keep it there.
+// F1.3 (2026-08-09): Route sync — two critical REST API bugs fixed:
+//   1. Callback GC: inline `new RestCallback(...)` is GC'd before async response.
+//      Fix: store in ref array (m_aActiveCallbacks) to keep alive.
+//   2. POST body empty: Enforce POST(cb, path, body) sends HTTP but body never arrives.
+//      Fix: send data via GET query param (/sitrep?data=<urlencoded_json>).
+//   Both SetOnSuccess (modern) and OnSuccess (deprecated override) fire correctly
+//   once the callback survives GC. We use SetOnSuccess in the constructor.
 
 //------------------------------------------------------------------------------------------------
 class LLMSquadMember
@@ -41,7 +33,7 @@ class LLMWaypoint
 {
 	string m_sID;
 	vector m_vPosition;
-	string m_sType; // "PATROL", "ATTACK", "DEFEND", "MOVE"
+	string m_sType;
 	bool m_bExecuted;
 	float m_fSpawnTime;
 
@@ -51,10 +43,14 @@ class LLMWaypoint
 		m_vPosition = vPos;
 		m_sType = sType;
 		m_bExecuted = false;
-		m_fSpawnTime = 0.0; // set by LLMBridge.SpawnWaypoint (m_fTime)
+		m_fSpawnTime = 0.0;
 	}
 }
 
+//------------------------------------------------------------------------------------------------
+// REST callback — extends RestCallback.
+// SetOnSuccess/SetOnError are called in the constructor (modern API).
+// The deprecated OnSuccess/OnError overrides are kept as fallback (they also fire).
 //------------------------------------------------------------------------------------------------
 class LLMBridgeRestCallback : RestCallback
 {
@@ -65,18 +61,34 @@ class LLMBridgeRestCallback : RestCallback
 	{
 		m_pOwner = pOwner;
 		m_sEndpoint = sEndpoint;
+		SetOnSuccess(SuccessHandler);
+		SetOnError(ErrorHandler);
+	}
+
+	void SuccessHandler(RestCallback cb = null)
+	{
+		Print("[LLMBridge] REST " + m_sEndpoint + " OK");
+		if (m_pOwner)
+			m_pOwner.OnRestSuccess(m_sEndpoint, "");
+	}
+
+	void ErrorHandler(RestCallback cb = null)
+	{
+		Print("[LLMBridge] REST " + m_sEndpoint + " ERROR");
+		if (m_pOwner)
+			m_pOwner.OnRestError(m_sEndpoint, 0);
 	}
 
 	override void OnSuccess(string data, int dataSize)
 	{
-		Print("[LLMBridge] REST " + m_sEndpoint + " OK (" + dataSize + " bytes)");
+		Print("[LLMBridge] REST " + m_sEndpoint + " OnSuccess data=" + data + " size=" + dataSize);
 		if (m_pOwner)
 			m_pOwner.OnRestSuccess(m_sEndpoint, data);
 	}
 
 	override void OnError(int errorCode)
 	{
-		Print("[LLMBridge] REST " + m_sEndpoint + " ERROR " + errorCode);
+		Print("[LLMBridge] REST " + m_sEndpoint + " OnError code=" + errorCode);
 		if (m_pOwner)
 			m_pOwner.OnRestError(m_sEndpoint, errorCode);
 	}
@@ -86,36 +98,40 @@ class LLMBridgeRestCallback : RestCallback
 class LLMBridge
 {
 	// ===== Configuration =====
-	string m_sPythonBridgeURL;   // e.g. "http://127.0.0.1:5001"
-	string m_sLLMModel;          // e.g. "llama3"
-	float m_fLLMTimeout;         // seconds (default 3.0)
-	float m_fSITREPInterval;     // seconds between SITREPs (default 10.0)
-	float m_fLLMCALLInterval;    // min seconds between LLM calls (default 2.0)
+	string m_sPythonBridgeURL;
+	string m_sLLMModel;
+	float m_fLLMTimeout;
+	float m_fSITREPInterval;
+	float m_fLLMCALLInterval;
 
-	// Squad members to control
+	// Squad members
 	ref array<ref LLMSquadMember> m_aSquadMembers;
 
 	// ===== State =====
 	bool m_bLLMReady;
 	bool m_bPassiveMode;
 
-	// REST (real Enfusion API)
-	RestContext m_Rest; // non-ref! RestApi owns the context (destructor is private)
+	// REST
+	RestContext m_Rest; // non-ref! RestApi owns the context
 
-	// Waypoints managed by LLM
+	// Active callbacks — MUST be ref to prevent GC before async response (F1.3 fix)
+	ref array<ref LLMBridgeRestCallback> m_aActiveCallbacks;
+
+	// Waypoints
 	ref array<ref LLMWaypoint> m_aWaypoints;
 
-	// Timers (m_fTime accumulates via Update timeslice, in seconds)
+	// Timers
 	float m_fTime;
 	float m_fLastSITREP;
 	float m_fLastLLMCall;
 	float m_fSITREPTimer;
 	float m_fStatusTimer;
+	float m_fHealthCheckTimer;
 
 	//------------------------------------------------------------------------------------------------
 	void LLMBridge()
 	{
-		m_sPythonBridgeURL = "http://127.0.0.1:5001"; // must match python_bridge/config.json
+		m_sPythonBridgeURL = "http://127.0.0.1:5001";
 		m_sLLMModel = "llama3";
 		m_fLLMTimeout = 3.0;
 		m_fSITREPInterval = 10.0;
@@ -127,6 +143,7 @@ class LLMBridge
 		m_fLastLLMCall = 0.0;
 		m_fSITREPTimer = 0.0;
 		m_fStatusTimer = 0.0;
+		m_fHealthCheckTimer = 0.0;
 
 		m_aSquadMembers = new array<ref LLMSquadMember>;
 		m_aSquadMembers.Insert(new LLMSquadMember("Alpha_1"));
@@ -135,8 +152,20 @@ class LLMBridge
 		m_aSquadMembers.Insert(new LLMSquadMember("Alpha_4"));
 
 		m_aWaypoints = new array<ref LLMWaypoint>;
+		m_aActiveCallbacks = new array<ref LLMBridgeRestCallback>;
 
 		Print("[LLMBridge] Initialized (bridge URL: " + m_sPythonBridgeURL + ")");
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Create callback and store in ref array to prevent GC before async response
+	protected LLMBridgeRestCallback CreateCallback(string sEndpoint)
+	{
+		LLMBridgeRestCallback cb = new LLMBridgeRestCallback(this, sEndpoint);
+		m_aActiveCallbacks.Insert(cb);
+		while (m_aActiveCallbacks.Count() > 20)
+			m_aActiveCallbacks.RemoveOrdered(0);
+		return cb;
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -157,7 +186,36 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
-	// Called later (F1.2) from a component
+	// URL-encode for GET query params (Enforce has no built-in encoder)
+	protected string UrlEncode(string s)
+	{
+		string result = "";
+		for (int i = 0; i < s.Length(); i++)
+		{
+			string ch = s.Get(i);
+			if (ch == " ")
+				result += "%20";
+			else if (ch == "\"")
+				result += "%22";
+			else if (ch == "{")
+				result += "%7B";
+			else if (ch == "}")
+				result += "%7D";
+			else if (ch == "[")
+				result += "%5B";
+			else if (ch == "]")
+				result += "%5D";
+			else if (ch == ":")
+				result += "%3A";
+			else if (ch == ",")
+				result += "%2C";
+			else
+				result += ch;
+		}
+		return result;
+	}
+
+	//------------------------------------------------------------------------------------------------
 	void Activate()
 	{
 		Print("[LLMBridge] Activated");
@@ -165,7 +223,7 @@ class LLMBridge
 		CheckLLMHealth();
 	}
 
-	// Called later (F1.2) from a component's OnUpdate
+	//------------------------------------------------------------------------------------------------
 	void Update(float timeslice)
 	{
 		m_fTime += timeslice;
@@ -181,6 +239,16 @@ class LLMBridge
 		{
 			m_fStatusTimer = 0.0;
 			UpdateStatus();
+		}
+
+		if (!m_bLLMReady)
+		{
+			m_fHealthCheckTimer += timeslice;
+			if (m_fHealthCheckTimer >= 15.0)
+			{
+				m_fHealthCheckTimer = 0.0;
+				CheckLLMHealth();
+			}
 		}
 
 		CheckWaypoints(timeslice);
@@ -218,21 +286,21 @@ class LLMBridge
 	void CheckLLMHealth()
 	{
 		EnsureRest();
-		Print("[LLMBridge] Checking bridge health: " + m_sPythonBridgeURL + "/health");
-		m_Rest.GET(new LLMBridgeRestCallback(this, "/health"), "/health");
+		LLMBridgeRestCallback cb = CreateCallback("/health");
+		m_Rest.GET(cb, "/health");
 	}
 
 	// ===== SITREP Collection =====
 	//------------------------------------------------------------------------------------------------
 	void SendSITREP()
 	{
-		if (!m_bLLMReady && !m_bPassiveMode)
+		if (!m_bLLMReady)
 		{
 			Print("[LLMBridge] LLM not ready, skipping SITREP");
 			return;
 		}
 
-		string sJSON = "{\"source\": \"game\", \"type\": \"SITREP\", \"squad\": [";
+		string sJSON = "{\"source\":\"game\",\"type\":\"SITREP\",\"squad\":[";
 		for (int i = 0; i < m_aSquadMembers.Count(); i++)
 		{
 			if (i > 0)
@@ -242,14 +310,16 @@ class LLMBridge
 			if (sSitrep.IsEmpty())
 				sSitrep = "clear";
 
-			sJSON += "{\"name\": \"" + m_aSquadMembers[i].m_sName + "\", ";
-			sJSON += "\"order\": \"" + m_aSquadMembers[i].m_sCurrentOrder + "\", ";
-			sJSON += "\"sitrep\": \"" + sSitrep + "\"}";
+			sJSON += "{\"name\":\"" + m_aSquadMembers[i].m_sName + "\",";
+			sJSON += "\"order\":\"" + m_aSquadMembers[i].m_sCurrentOrder + "\",";
+			sJSON += "\"sitrep\":\"" + sSitrep + "\"}";
 		}
 		sJSON += "]}";
 
 		EnsureRest();
-		m_Rest.POST(new LLMBridgeRestCallback(this, "/sitrep"), "/sitrep", sJSON);
+		// Send via GET query param (POST body doesn't transmit in Enforce)
+		LLMBridgeRestCallback cb = CreateCallback("/sitrep");
+		m_Rest.GET(cb, "/sitrep?data=" + UrlEncode(sJSON));
 		m_fLastSITREP = m_fTime;
 		Print("[LLMBridge] SITREP sent");
 	}
@@ -265,15 +335,11 @@ class LLMBridge
 			return;
 		}
 
-		string sJSON = "{";
-		sJSON += "\"source\": \"game\", ";
-		sJSON += "\"type\": \"COMMAND\", ";
-		sJSON += "\"command\": \"" + sCommand + "\", ";
-		sJSON += "\"model\": \"" + m_sLLMModel + "\"";
-		sJSON += "}";
+		string sJSON = "{\"source\":\"game\",\"type\":\"COMMAND\",\"command\":\"" + sCommand + "\",\"model\":\"" + m_sLLMModel + "\"}";
 
 		EnsureRest();
-		m_Rest.POST(new LLMBridgeRestCallback(this, "/command"), "/command", sJSON);
+		LLMBridgeRestCallback cb = CreateCallback("/command");
+		m_Rest.GET(cb, "/command?data=" + UrlEncode(sJSON));
 		m_fLastLLMCall = fNow;
 		Print("[LLMBridge] Command sent: " + sCommand);
 	}
@@ -282,17 +348,11 @@ class LLMBridge
 	//------------------------------------------------------------------------------------------------
 	void UpdateStatus()
 	{
-		string sJSON = "{";
-		sJSON += "\"source\": \"game\", ";
-		sJSON += "\"type\": \"STATUS\", ";
-		sJSON += "\"llm_ready\": " + BoolStr(m_bLLMReady) + ", ";
-		sJSON += "\"passive_mode\": " + BoolStr(m_bPassiveMode) + ", ";
-		sJSON += "\"squad_count\": " + m_aSquadMembers.Count() + ", ";
-		sJSON += "\"waypoint_count\": " + m_aWaypoints.Count();
-		sJSON += "}";
+		string sJSON = "{\"source\":\"game\",\"type\":\"STATUS\",\"llm_ready\":" + BoolStr(m_bLLMReady) + ",\"passive_mode\":" + BoolStr(m_bPassiveMode) + ",\"squad_count\":" + m_aSquadMembers.Count() + ",\"waypoint_count\":" + m_aWaypoints.Count() + "}";
 
 		EnsureRest();
-		m_Rest.POST(new LLMBridgeRestCallback(this, "/status"), "/status", sJSON);
+		LLMBridgeRestCallback cb = CreateCallback("/status");
+		m_Rest.GET(cb, "/status?data=" + UrlEncode(sJSON));
 	}
 
 	// ===== Waypoint Management =====
@@ -306,16 +366,11 @@ class LLMBridge
 
 		Print("[LLMBridge] Waypoint spawned: " + sID + " at " + vPos.ToString());
 
-		string sJSON = "{";
-		sJSON += "\"source\": \"game\", ";
-		sJSON += "\"type\": \"WAYPOINT\", ";
-		sJSON += "\"id\": \"" + sID + "\", ";
-		sJSON += "\"position\": [" + vPos[0] + ", " + vPos[1] + ", " + vPos[2] + "], ";
-		sJSON += "\"wp_type\": \"" + sType + "\"";
-		sJSON += "}";
+		string sJSON = "{\"source\":\"game\",\"type\":\"WAYPOINT\",\"id\":\"" + sID + "\",\"position\":[" + vPos[0] + "," + vPos[1] + "," + vPos[2] + "],\"wp_type\":\"" + sType + "\"}";
 
 		EnsureRest();
-		m_Rest.POST(new LLMBridgeRestCallback(this, "/waypoint"), "/waypoint", sJSON);
+		LLMBridgeRestCallback cb = CreateCallback("/waypoint");
+		m_Rest.GET(cb, "/waypoint?data=" + UrlEncode(sJSON));
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -327,7 +382,7 @@ class LLMBridge
 			if (!wp.m_bExecuted)
 			{
 				float fAge = m_fTime - wp.m_fSpawnTime;
-				if (fAge > 30.0) // 30 seconds
+				if (fAge > 30.0)
 				{
 					wp.m_bExecuted = true;
 					Print("[LLMBridge] Waypoint " + wp.m_sID + " timed out");
