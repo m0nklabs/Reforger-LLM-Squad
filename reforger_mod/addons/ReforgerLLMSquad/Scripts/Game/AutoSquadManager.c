@@ -199,13 +199,19 @@ modded class SCR_AIWorld
 
 			// Use AddAgentFromControlledEntity pattern:
 			// This is the vanilla pattern from SCR_PlayerControllerGroupComponent.AddAIToSlaveGroup()
+			// Use AddAgentFromControlledEntity pattern (vanilla MP pattern):
+			// This calls OnGroupMemberStateChange() which broadcasts via RplRpc to clients
+			// IMPORTANT: Do NOT call ActivateAI() before adding to group!
+			// The AI combat component crashes if it simulates before the group's
+			// SCR_AIGroupUtilityComponent is fully initialized.
 			AIControlComponent aiCtrl = AIControlComponent.Cast(aiEnt.FindComponent(AIControlComponent));
 			if (!aiCtrl) { Print("[AutoSquad] LiveManual: no AIControlComponent on #" + i); continue; }
 
-			aiCtrl.ActivateAI();
-
-			// Add to SLAVE group (NOT master group!) — this is critical for MP commanding
+			// Add to SLAVE group FIRST (NOT master group!) — this triggers RPL broadcast
 			slaveGroup.AddAgentFromControlledEntity(aiEnt);
+
+			// Activate AI AFTER group assignment — delay to let group components initialize
+			GetGame().GetCallqueue().CallLater(aiCtrl.ActivateAI, 500, false);
 
 			Print("[AutoSquad] LiveManual: AI #" + i + " spawned and added to SLAVE group at " + spawnPos);
 		}
@@ -223,6 +229,21 @@ modded class SCR_AIWorld
 		}
 
 		Print("[AutoSquad] LiveManual: Done, 5 AI spawned with formation");
+
+		// Auto-follow: create a Follow waypoint at player position so squad follows by default
+		Resource followRes = Resource.Load("{A0509D3C4DD4475E}Prefabs/AI/Waypoints/AIWaypoint_Follow.et");
+		if (followRes && followRes.IsValid())
+		{
+			EntitySpawnParams wpParams = new EntitySpawnParams();
+			wpParams.TransformMode = ETransformMode.WORLD;
+			wpParams.Transform[3] = playerPos;
+			AIWaypoint followWP = AIWaypoint.Cast(GetGame().SpawnEntityPrefab(followRes, GetGame().GetWorld(), wpParams));
+			if (followWP)
+			{
+				slaveGroup.AddWaypoint(followWP);
+				Print("[AutoSquad] Auto-follow: Follow waypoint created at " + playerPos);
+			}
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------
