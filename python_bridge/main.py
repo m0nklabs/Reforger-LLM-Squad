@@ -2,10 +2,9 @@
 Reforger LLM Squad Control - Python Bridge
 FastAPI server that bridges Arma Reforger with OpenAI-compatible LLM proxy.
 
-F1.3 (2026-08-09): Route sync complete.
-  - Game sends data via GET ?data=<urlencoded_json> (POST body doesn't transmit in Enforce)
-  - All endpoints accept both GET (query param) and POST (body)
-  - Pydantic models used for internal parsing only
+F1.3: Route sync complete. Game sends via GET ?data=<urlencoded_json>.
+F2.3: Waypoint execution — LLM orders → AIWaypoint → squad moves.
+F2.x: Live orders — /orders endpoint for real-time debugging without game restart.
 """
 
 import json
@@ -15,16 +14,14 @@ from typing import Optional, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from openai import OpenAI
 
-# Load config
 import os
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 with open(CONFIG_PATH, "r") as f:
     CONFIG = json.load(f)
 
-# Configure logging
 logging.basicConfig(
     level=getattr(logging, CONFIG["logging"]["level"]),
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -35,7 +32,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("reforger_bridge")
 
-# Initialize OpenAI client
 client = OpenAI(
     base_url=CONFIG["llm"]["base_url"],
     api_key=CONFIG["llm"]["api_key"],
@@ -65,18 +61,36 @@ class CommandRequest(BaseModel):
 class SitRepResponse(BaseModel):
     status: str = "ok"
     action: str = "HOLD"
+    target_offset: Optional[List[float]] = None
     voice_reply: str = ""
     timestamp: float = Field(default_factory=time.time)
 
-# LLM function schema
+    @field_validator('target_offset', mode='before')
+    @classmethod
+    def parse_target_offset(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except:
+                return None
+        if isinstance(v, list):
+            return v
+        return None
+
 ISSUE_ORDER_FUNCTION = {
     "name": "issue_order",
-    "description": "Issue a tactical order to a squad based on the situation",
+    "description": "Issue a tactical order to a squad. target_offset is RELATIVE to the squad's current position in meters: [dx, dz] where positive dx=east, positive dz=south.",
     "parameters": {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD"]},
-            "target_grid": {"type": "string"},
+            "target_offset": {
+                "type": "array",
+                "items": {"type": "number"},
+                "description": "Relative offset [dx, dz] in meters from squad position."
+            },
             "voice_reply": {"type": "string"}
         },
         "required": ["action", "voice_reply"]
@@ -84,15 +98,13 @@ ISSUE_ORDER_FUNCTION = {
 }
 
 SYSTEM_PROMPT = """You are a tactical AI adjutant in Arma Reforger.
-You control squad units and issue orders based on the situation.
+You control a squad of 4 AI soldiers. Issue tactical orders based on the situation.
 
 {situation}
 
-Given the operator's command and the current situation, issue a tactical order.
-Respond ONLY with valid JSON matching the schema below.
-No markdown, no extra text, just the JSON object."""
-
-# --- State ---
+When ordering MOVE/FLANK/RETREAT, provide target_offset as RELATIVE meters [dx, dz] from the squad's current position.
+positive dx = east, positive dz = south. Keep offsets small (50-300m). When clear, issue HOLD.
+Respond ONLY with valid JSON matching the function schema."""
 
 app_state = {
     "last_sitrep": None,
@@ -103,18 +115,24 @@ app_state = {
     "last_waypoint": None,
     "sitrep_count": 0,
     "command_count": 0,
+    "pending_orders": [],  # F2.x: live orders queue
 }
-
-# --- Helpers ---
 
 def get_situation_text(sitrep: SitRepRequest) -> str:
     lines = []
+    pos = None
+    if sitrep.model_extra:
+        pos = sitrep.model_extra.get("position")
+    if pos:
+        if isinstance(pos, list):
+            lines.append(f"Squad position: ({pos[0]:.1f}, {pos[1] if len(pos) > 1 else 0:.1f}, {pos[2] if len(pos) > 2 else 0:.1f})")
+        else:
+            lines.append(f"Squad position: {pos}")
     for m in sitrep.squad:
         lines.append(f"  {m.name}: order={m.order}, sitrep={m.sitrep}")
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
 
 def call_llm(command: str, situation: str) -> SitRepResponse:
-    """Call LLM with function calling, fallback to JSON mode"""
     try:
         app_state["llm_calls"] += 1
         messages = [
@@ -131,11 +149,13 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
         )
         tool_call = response.choices[0].message.tool_calls[0]
         args = json.loads(tool_call.function.arguments)
-        return SitRepResponse(
-            status="ok",
-            action=args.get("action", "HOLD"),
-            voice_reply=args.get("voice_reply", ""),
-        )
+        target_offset = args.get("target_offset", None)
+        if isinstance(target_offset, str):
+            try:
+                target_offset = json.loads(target_offset)
+            except:
+                target_offset = None
+        return SitRepResponse(status="ok", action=args.get("action", "HOLD"), target_offset=target_offset, voice_reply=args.get("voice_reply", ""))
     except Exception as e1:
         logger.warning(f"Function calling failed: {e1}")
         try:
@@ -143,43 +163,22 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
                 model=CONFIG["llm"]["model"],
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT.format(situation=situation)},
-                    {"role": "user", "content": command + '\nReturn JSON: {"action": "HOLD|ATTACK|PATROL|RETREAT|SUPPRESS", "voice_reply": "..."}'}
+                    {"role": "user", "content": command + '\nReturn JSON: {"action": "HOLD|MOVE|ATTACK|RETREAT", "target_offset": [dx, dz], "voice_reply": "..."}'}
                 ],
                 response_format={"type": "json_object"},
                 max_tokens=CONFIG["llm"]["max_tokens"],
                 temperature=0.3
             )
             data = json.loads(response.choices[0].message.content)
-            return SitRepResponse(
-                status="ok",
-                action=data.get("action", "HOLD"),
-                voice_reply=data.get("voice_reply", ""),
-            )
+            to = data.get("target_offset", None)
+            if isinstance(to, str):
+                try: to = json.loads(to)
+                except: to = None
+            return SitRepResponse(status="ok", action=data.get("action", "HOLD"), target_offset=to, voice_reply=data.get("voice_reply", ""))
         except Exception as e2:
             logger.error(f"LLM call failed: {e2}")
             app_state["errors"] += 1
             return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
-
-def extract_data(request: Request) -> dict:
-    """Extract JSON data from request — tries body first, then ?data= query param"""
-    # Try POST body
-    import asyncio
-    raw = asyncio.get_event_loop().run_until_complete(request.body())
-    if raw:
-        try:
-            return json.loads(raw)
-        except:
-            pass
-    # Try GET query param
-    param = request.query_params.get("data")
-    if param:
-        try:
-            return json.loads(param)
-        except:
-            pass
-    return None
-
-# --- Lifespan ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -187,55 +186,60 @@ async def lifespan(app: FastAPI):
     logger.info(f"Proxy URL: {CONFIG['llm']['base_url']}")
     logger.info(f"Model: {CONFIG['llm']['model']}")
     logger.info(f"Port: {CONFIG['server']['port']}")
-
     try:
-        test_response = client.chat.completions.create(
-            model=CONFIG["llm"]["model"],
-            messages=[{"role": "user", "content": "Test"}],
-            max_tokens=10
-        )
+        test_response = client.chat.completions.create(model=CONFIG["llm"]["model"], messages=[{"role": "user", "content": "Test"}], max_tokens=10)
         logger.info(f"Proxy connection OK: {test_response.model}")
     except Exception as e:
         logger.warning(f"Proxy connection failed: {e}")
-
     yield
     logger.info("=== Reforger LLM Bridge Shutting Down ===")
 
-# --- FastAPI App ---
-
-app = FastAPI(
-    title="Reforger LLM Squad Control",
-    version="1.3.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="Reforger LLM Squad Control", version="2.0.0", lifespan=lifespan)
 
 # =======================================================================
-# GET /health — pinged by LLMBridge at startup + every 15s if not ready
+# GET /health
 # =======================================================================
 @app.get("/health")
 async def health_check():
     uptime = time.time() - app_state["health_check_time"]
     return {
-        "status": "healthy",
-        "uptime_seconds": round(uptime, 2),
-        "llm_calls": app_state["llm_calls"],
-        "errors": app_state["errors"],
-        "sitreps_received": app_state["sitrep_count"],
-        "commands_received": app_state["command_count"],
-        "proxy": CONFIG["llm"]["base_url"],
-        "model": CONFIG["llm"]["model"]
+        "status": "healthy", "uptime_seconds": round(uptime, 2),
+        "llm_calls": app_state["llm_calls"], "errors": app_state["errors"],
+        "sitreps_received": app_state["sitrep_count"], "commands_received": app_state["command_count"],
+        "pending_orders": len(app_state["pending_orders"]),
+        "proxy": CONFIG["llm"]["base_url"], "model": CONFIG["llm"]["model"]
     }
 
 # =======================================================================
+# /orders — LIVE command queue (F2.x: debug without game restart)
+# POST /orders  {cmd: "spawn"} or {cmd: "move", offset: [100, 0]} or {cmd: "hold"}
+# GET /orders   — returns first pending order, or {cmd: null}
+# =======================================================================
+@app.get("/orders")
+async def get_orders():
+    if app_state["pending_orders"]:
+        order = app_state["pending_orders"].pop(0)
+        logger.info(f"Order delivered to game: {order}")
+        return order
+    return {"cmd": None}
+
+@app.post("/orders")
+async def post_orders(request: Request):
+    data = await _get_data(request)
+    if data:
+        app_state["pending_orders"].append(data)
+        logger.info(f"Order queued: {data}")
+        return {"status": "ok", "queued": len(app_state["pending_orders"])}
+    return {"status": "error", "msg": "no data"}
+
+# =======================================================================
 # /sitrep — GET (query param) or POST (body)
-# Game sends: {"source":"game","type":"SITREP","squad":[{name,order,sitrep},...]}
 # =======================================================================
 @app.get("/sitrep")
 @app.post("/sitrep")
 async def receive_sitrep(request: Request):
     app_state["sitrep_count"] += 1
     data = await _get_data(request)
-
     if data:
         try:
             sitrep = SitRepRequest(**data)
@@ -243,62 +247,42 @@ async def receive_sitrep(request: Request):
             logger.warning(f"SITREP parse error: {e}")
             sitrep = SitRepRequest()
     else:
-        sitrep = SitRepRequest(squad=[
-            SitRepMember(name=f"Alpha_{i+1}") for i in range(4)
-        ])
-
+        sitrep = SitRepRequest(squad=[SitRepMember(name=f"Alpha_{i+1}") for i in range(4)])
     app_state["last_sitrep"] = sitrep
     logger.info(f"SITREP #{app_state['sitrep_count']}: {len(sitrep.squad)} members")
-
     situation = get_situation_text(sitrep)
-    response = call_llm(
-        command=f"SITREP review: {len(sitrep.squad)} squad members deployed.",
-        situation=situation
-    )
-    logger.info(f"LLM order: action={response.action}, reply={response.voice_reply}")
+    response = call_llm(command=f"SITREP review: {len(sitrep.squad)} squad members deployed.", situation=situation)
+    logger.info(f"LLM order: action={response.action}, offset={response.target_offset}")
     return response
 
 # =======================================================================
 # /command — GET (query param) or POST (body)
-# Game sends: {"source":"game","type":"COMMAND","command":"ATTACK","model":"llama3"}
-# Game's OnRestSuccess → OnRadioCallback(data) parses response for keywords
 # =======================================================================
 @app.get("/command")
 @app.post("/command")
 async def receive_command(request: Request):
     app_state["command_count"] += 1
     data = await _get_data(request)
-
     if data:
-        try:
-            cmd = CommandRequest(**data)
-        except:
-            cmd = CommandRequest(command="UNKNOWN")
+        try: cmd = CommandRequest(**data)
+        except: cmd = CommandRequest(command="UNKNOWN")
     else:
         cmd = CommandRequest(command="UNKNOWN")
-
     logger.info(f"Command #{app_state['command_count']}: '{cmd.command}'")
-
     situation = get_situation_text(app_state["last_sitrep"]) if app_state["last_sitrep"] else "No SITREP data."
     response = call_llm(command=cmd.command, situation=situation)
-    logger.info(f"LLM order: action={response.action}, reply={response.voice_reply}")
+    logger.info(f"LLM order: action={response.action}")
     return response
 
 # =======================================================================
-# /status — GET: if ?data= present → process, else return bridge state
-#           POST: always process
+# /status
 # =======================================================================
 @app.get("/status")
 async def receive_status_get(request: Request):
     if request.query_params.get("data"):
         return await _process_status(request)
-    # No data param → return bridge state
     last_sitrep = app_state["last_sitrep"].model_dump() if app_state["last_sitrep"] else None
-    return {
-        "state": {k: v for k, v in app_state.items() if k != "last_sitrep"},
-        "last_sitrep": last_sitrep,
-        "config_loaded": True
-    }
+    return {"state": {k: v for k, v in app_state.items() if k != "last_sitrep"}, "last_sitrep": last_sitrep}
 
 @app.post("/status")
 async def receive_status_post(request: Request):
@@ -312,7 +296,7 @@ async def _process_status(request: Request):
     return {"status": "ok", "timestamp": time.time()}
 
 # =======================================================================
-# /waypoint — GET (query param) or POST (body)
+# /waypoint
 # =======================================================================
 @app.get("/waypoint")
 @app.post("/waypoint")
@@ -323,29 +307,17 @@ async def receive_waypoint(request: Request):
         app_state["last_waypoint"] = data
     return {"status": "ok", "timestamp": time.time()}
 
-# =======================================================================
-# Helper: extract JSON from request (body or query param)
-# =======================================================================
 async def _get_data(request: Request) -> dict:
     raw = await request.body()
     if raw:
-        try:
-            return json.loads(raw)
-        except:
-            pass
+        try: return json.loads(raw)
+        except: pass
     param = request.query_params.get("data")
     if param:
-        try:
-            return json.loads(param)
-        except:
-            pass
+        try: return json.loads(param)
+        except: pass
     return None
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        app,
-        host=CONFIG["server"]["host"],
-        port=CONFIG["server"]["port"],
-        log_level=CONFIG["logging"].get("level", "INFO").lower()
-    )
+    uvicorn.run(app, host=CONFIG["server"]["host"], port=CONFIG["server"]["port"], log_level=CONFIG["logging"].get("level", "INFO").lower())

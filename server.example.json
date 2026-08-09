@@ -1,0 +1,19 @@
+{
+    "bindAddress": "0.0.0.0",
+    "a2s": {
+        "address": "0.0.0.0",
+        "port": 17777
+    },
+    "rcon": {
+        "address": "0.0.0.0",
+        "port": 19999,
+        "password": "llmadmin"
+    },
+    "game": {
+        "name": "LLM Squad Test Server",
+        "password": "",
+        "scenarioId": "{ECC61978EDCC2B5A}Missions/23_Campaign.conf",
+        "maxPlayers": 10,
+        "mods": []
+    }
+}

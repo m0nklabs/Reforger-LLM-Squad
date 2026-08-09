@@ -1,13 +1,6 @@
 // LLMBridge.c - LLM Squad Control Bridge for Arma Reforger
-// Phase 1: REST bridge + AI squad control (no voice)
-//
-// F1.3 (2026-08-09): Route sync — two critical REST API bugs fixed:
-//   1. Callback GC: inline `new RestCallback(...)` is GC'd before async response.
-//      Fix: store in ref array (m_aActiveCallbacks) to keep alive.
-//   2. POST body empty: Enforce POST(cb, path, body) sends HTTP but body never arrives.
-//      Fix: send data via GET query param (/sitrep?data=<urlencoded_json>).
-//   Both SetOnSuccess (modern) and OnSuccess (deprecated override) fire correctly
-//   once the callback survives GC. We use SetOnSuccess in the constructor.
+// Phase 1: REST bridge + AI squad control
+// Phase 2: Waypoint execution + LIVE orders (debug without restart)
 
 //------------------------------------------------------------------------------------------------
 class LLMSquadMember
@@ -48,10 +41,6 @@ class LLMWaypoint
 }
 
 //------------------------------------------------------------------------------------------------
-// REST callback — extends RestCallback.
-// SetOnSuccess/SetOnError are called in the constructor (modern API).
-// The deprecated OnSuccess/OnError overrides are kept as fallback (they also fire).
-//------------------------------------------------------------------------------------------------
 class LLMBridgeRestCallback : RestCallback
 {
 	LLMBridge m_pOwner;
@@ -67,28 +56,23 @@ class LLMBridgeRestCallback : RestCallback
 
 	void SuccessHandler(RestCallback cb = null)
 	{
-		Print("[LLMBridge] REST " + m_sEndpoint + " OK");
-		if (m_pOwner)
-			m_pOwner.OnRestSuccess(m_sEndpoint, "");
+		// Skipped - OnSuccess override provides actual response data
 	}
 
 	void ErrorHandler(RestCallback cb = null)
 	{
-		Print("[LLMBridge] REST " + m_sEndpoint + " ERROR");
 		if (m_pOwner)
 			m_pOwner.OnRestError(m_sEndpoint, 0);
 	}
 
 	override void OnSuccess(string data, int dataSize)
 	{
-		Print("[LLMBridge] REST " + m_sEndpoint + " OnSuccess data=" + data + " size=" + dataSize);
 		if (m_pOwner)
 			m_pOwner.OnRestSuccess(m_sEndpoint, data);
 	}
 
 	override void OnError(int errorCode)
 	{
-		Print("[LLMBridge] REST " + m_sEndpoint + " OnError code=" + errorCode);
 		if (m_pOwner)
 			m_pOwner.OnRestError(m_sEndpoint, errorCode);
 	}
@@ -97,24 +81,20 @@ class LLMBridgeRestCallback : RestCallback
 //------------------------------------------------------------------------------------------------
 class LLMBridge
 {
-	// ===== Configuration =====
+	// Config
 	string m_sPythonBridgeURL;
 	string m_sLLMModel;
-	float m_fLLMTimeout;
 	float m_fSITREPInterval;
-	float m_fLLMCALLInterval;
 
-	// Squad members
+	// Squad
 	ref array<ref LLMSquadMember> m_aSquadMembers;
 
-	// ===== State =====
+	// State
 	bool m_bLLMReady;
 	bool m_bPassiveMode;
 
 	// REST
-	RestContext m_Rest; // non-ref! RestApi owns the context
-
-	// Active callbacks — MUST be ref to prevent GC before async response (F1.3 fix)
+	RestContext m_Rest;
 	ref array<ref LLMBridgeRestCallback> m_aActiveCallbacks;
 
 	// Waypoints
@@ -122,28 +102,31 @@ class LLMBridge
 
 	// Timers
 	float m_fTime;
-	float m_fLastSITREP;
-	float m_fLastLLMCall;
 	float m_fSITREPTimer;
 	float m_fStatusTimer;
 	float m_fHealthCheckTimer;
+	float m_fOrdersTimer;
+	string m_sLastAction;
+
+	// Waypoint prefabs
+	static const string WP_MOVE = "{750A8D1695BD6998}Prefabs/AI/Waypoints/AIWaypoint_Move.et";
+	static const string WP_ATTACK = "{1B0E3436C30FA211}Prefabs/AI/Waypoints/AIWaypoint_Attack.et";
+	static const string WP_DEFEND = "{93291E72AC23930F}Prefabs/AI/Waypoints/AIWaypoint_Defend.et";
+	static const string WP_FOLLOW = "{A0509D3C4DD4475E}Prefabs/AI/Waypoints/AIWaypoint_Follow.et";
 
 	//------------------------------------------------------------------------------------------------
 	void LLMBridge()
 	{
 		m_sPythonBridgeURL = "http://127.0.0.1:5001";
 		m_sLLMModel = "llama3";
-		m_fLLMTimeout = 3.0;
 		m_fSITREPInterval = 10.0;
-		m_fLLMCALLInterval = 2.0;
 		m_bLLMReady = false;
 		m_bPassiveMode = false;
-		m_fTime = 0.0;
-		m_fLastSITREP = 0.0;
-		m_fLastLLMCall = 0.0;
-		m_fSITREPTimer = 0.0;
-		m_fStatusTimer = 0.0;
-		m_fHealthCheckTimer = 0.0;
+		m_fTime = 0;
+		m_fSITREPTimer = 0;
+		m_fStatusTimer = 0;
+		m_fHealthCheckTimer = 0;
+		m_fOrdersTimer = 0;
 
 		m_aSquadMembers = new array<ref LLMSquadMember>;
 		m_aSquadMembers.Insert(new LLMSquadMember("Alpha_1"));
@@ -157,8 +140,12 @@ class LLMBridge
 		Print("[LLMBridge] Initialized (bridge URL: " + m_sPythonBridgeURL + ")");
 	}
 
-	//------------------------------------------------------------------------------------------------
-	// Create callback and store in ref array to prevent GC before async response
+	protected string BoolStr(bool b)
+	{
+		if (b) return "true";
+		return "false";
+	}
+
 	protected LLMBridgeRestCallback CreateCallback(string sEndpoint)
 	{
 		LLMBridgeRestCallback cb = new LLMBridgeRestCallback(this, sEndpoint);
@@ -168,54 +155,34 @@ class LLMBridge
 		return cb;
 	}
 
-	//------------------------------------------------------------------------------------------------
 	protected void EnsureRest()
 	{
 		if (!m_Rest)
 		{
 			m_Rest = GetGame().GetRestApi().GetContext(m_sPythonBridgeURL);
-			Print("[LLMBridge] REST context created for " + m_sPythonBridgeURL);
+			Print("[LLMBridge] REST context created");
 		}
 	}
 
-	protected string BoolStr(bool b)
-	{
-		if (b)
-			return "true";
-		return "false";
-	}
-
-	//------------------------------------------------------------------------------------------------
-	// URL-encode for GET query params (Enforce has no built-in encoder)
 	protected string UrlEncode(string s)
 	{
-		string result = "";
+		string r = "";
 		for (int i = 0; i < s.Length(); i++)
 		{
 			string ch = s.Get(i);
-			if (ch == " ")
-				result += "%20";
-			else if (ch == "\"")
-				result += "%22";
-			else if (ch == "{")
-				result += "%7B";
-			else if (ch == "}")
-				result += "%7D";
-			else if (ch == "[")
-				result += "%5B";
-			else if (ch == "]")
-				result += "%5D";
-			else if (ch == ":")
-				result += "%3A";
-			else if (ch == ",")
-				result += "%2C";
-			else
-				result += ch;
+			if (ch == " ") r += "%20";
+			else if (ch == "\"") r += "%22";
+			else if (ch == "{") r += "%7B";
+			else if (ch == "}") r += "%7D";
+			else if (ch == "[") r += "%5B";
+			else if (ch == "]") r += "%5D";
+			else if (ch == ":") r += "%3A";
+			else if (ch == ",") r += "%2C";
+			else r += ch;
 		}
-		return result;
+		return r;
 	}
 
-	//------------------------------------------------------------------------------------------------
 	void Activate()
 	{
 		Print("[LLMBridge] Activated");
@@ -223,22 +190,29 @@ class LLMBridge
 		CheckLLMHealth();
 	}
 
-	//------------------------------------------------------------------------------------------------
 	void Update(float timeslice)
 	{
 		m_fTime += timeslice;
+
 		m_fSITREPTimer += timeslice;
 		if (m_fSITREPTimer >= m_fSITREPInterval)
 		{
-			m_fSITREPTimer = 0.0;
+			m_fSITREPTimer = 0;
 			SendSITREP();
 		}
 
 		m_fStatusTimer += timeslice;
 		if (m_fStatusTimer >= 5.0)
 		{
-			m_fStatusTimer = 0.0;
+			m_fStatusTimer = 0;
 			UpdateStatus();
+		}
+
+		m_fOrdersTimer += timeslice;
+		if (m_fOrdersTimer >= 2.0)
+		{
+			m_fOrdersTimer = 0;
+			PollOrders();
 		}
 
 		if (!m_bLLMReady)
@@ -246,214 +220,381 @@ class LLMBridge
 			m_fHealthCheckTimer += timeslice;
 			if (m_fHealthCheckTimer >= 15.0)
 			{
-				m_fHealthCheckTimer = 0.0;
+				m_fHealthCheckTimer = 0;
 				CheckLLMHealth();
 			}
 		}
-
-		CheckWaypoints(timeslice);
 	}
 
-	// ===== REST callbacks =====
 	//------------------------------------------------------------------------------------------------
 	void OnRestSuccess(string sEndpoint, string sData)
 	{
 		if (sEndpoint == "/health")
 		{
 			m_bLLMReady = true;
-			m_bPassiveMode = false;
 			Print("[LLMBridge] Bridge healthy, LLM mode active");
 		}
-		else if (sEndpoint == "/command")
+		else if (sEndpoint == "/sitrep")
 		{
 			OnRadioCallback(sData);
 		}
+		else if (sEndpoint == "/orders")
+		{
+			ProcessOrders(sData);
+		}
 	}
 
-	//------------------------------------------------------------------------------------------------
 	void OnRestError(string sEndpoint, int iErrorCode)
 	{
 		if (sEndpoint == "/health")
 		{
 			m_bLLMReady = false;
 			m_bPassiveMode = true;
-			Print("[LLMBridge] Bridge unreachable -> passive mode (HOLD)");
 		}
 	}
 
-	// ===== LLM Health Check =====
-	//------------------------------------------------------------------------------------------------
 	void CheckLLMHealth()
 	{
 		EnsureRest();
-		LLMBridgeRestCallback cb = CreateCallback("/health");
-		m_Rest.GET(cb, "/health");
+		CreateCallback("/health");
+		m_Rest.GET(m_aActiveCallbacks.Get(m_aActiveCallbacks.Count() - 1), "/health");
 	}
 
-	// ===== SITREP Collection =====
 	//------------------------------------------------------------------------------------------------
 	void SendSITREP()
 	{
-		if (!m_bLLMReady)
-		{
-			Print("[LLMBridge] LLM not ready, skipping SITREP");
-			return;
-		}
+		if (!m_bLLMReady) return;
 
-		string sJSON = "{\"source\":\"game\",\"type\":\"SITREP\",\"squad\":[";
+		vector squadPos = GetSquadPosition();
+		string sJSON = "{\"source\":\"game\",\"type\":\"SITREP\",\"position\":[" + squadPos[0] + "," + squadPos[1] + "," + squadPos[2] + "],\"squad\":[";
 		for (int i = 0; i < m_aSquadMembers.Count(); i++)
 		{
-			if (i > 0)
-				sJSON += ",";
-
-			string sSitrep = m_aSquadMembers[i].m_sSITREP;
-			if (sSitrep.IsEmpty())
-				sSitrep = "clear";
-
-			sJSON += "{\"name\":\"" + m_aSquadMembers[i].m_sName + "\",";
-			sJSON += "\"order\":\"" + m_aSquadMembers[i].m_sCurrentOrder + "\",";
-			sJSON += "\"sitrep\":\"" + sSitrep + "\"}";
+			if (i > 0) sJSON += ",";
+			string s = m_aSquadMembers[i].m_sSITREP;
+			if (s.IsEmpty()) s = "clear";
+			sJSON += "{\"name\":\"" + m_aSquadMembers[i].m_sName + "\",\"order\":\"" + m_aSquadMembers[i].m_sCurrentOrder + "\",\"sitrep\":\"" + s + "\"}";
 		}
 		sJSON += "]}";
 
 		EnsureRest();
-		// Send via GET query param (POST body doesn't transmit in Enforce)
 		LLMBridgeRestCallback cb = CreateCallback("/sitrep");
 		m_Rest.GET(cb, "/sitrep?data=" + UrlEncode(sJSON));
-		m_fLastSITREP = m_fTime;
-		Print("[LLMBridge] SITREP sent");
+		Print("[LLMBridge] SITREP sent (pos=" + squadPos + ")");
 	}
 
-	// ===== Command Routing =====
-	//------------------------------------------------------------------------------------------------
-	void SendCommand(string sCommand)
-	{
-		float fNow = m_fTime;
-		if (fNow - m_fLastLLMCall < m_fLLMCALLInterval)
-		{
-			Print("[LLMBridge] LLM call rate limited: " + sCommand);
-			return;
-		}
-
-		string sJSON = "{\"source\":\"game\",\"type\":\"COMMAND\",\"command\":\"" + sCommand + "\",\"model\":\"" + m_sLLMModel + "\"}";
-
-		EnsureRest();
-		LLMBridgeRestCallback cb = CreateCallback("/command");
-		m_Rest.GET(cb, "/command?data=" + UrlEncode(sJSON));
-		m_fLastLLMCall = fNow;
-		Print("[LLMBridge] Command sent: " + sCommand);
-	}
-
-	// ===== Status Update =====
 	//------------------------------------------------------------------------------------------------
 	void UpdateStatus()
 	{
-		string sJSON = "{\"source\":\"game\",\"type\":\"STATUS\",\"llm_ready\":" + BoolStr(m_bLLMReady) + ",\"passive_mode\":" + BoolStr(m_bPassiveMode) + ",\"squad_count\":" + m_aSquadMembers.Count() + ",\"waypoint_count\":" + m_aWaypoints.Count() + "}";
-
+		string sJSON = "{\"source\":\"game\",\"type\":\"STATUS\",\"llm_ready\":" + BoolStr(m_bLLMReady) + ",\"squad_count\":" + m_aSquadMembers.Count() + ",\"waypoint_count\":" + m_aWaypoints.Count() + "}";
 		EnsureRest();
 		LLMBridgeRestCallback cb = CreateCallback("/status");
 		m_Rest.GET(cb, "/status?data=" + UrlEncode(sJSON));
 	}
 
-	// ===== Waypoint Management =====
 	//------------------------------------------------------------------------------------------------
-	void SpawnWaypoint(vector vPos, string sType)
+	void PollOrders()
 	{
-		string sID = "WP_" + sType + "_" + m_aWaypoints.Count();
-		LLMWaypoint wp = new LLMWaypoint(sID, vPos, sType);
-		wp.m_fSpawnTime = m_fTime;
-		m_aWaypoints.Insert(wp);
-
-		Print("[LLMBridge] Waypoint spawned: " + sID + " at " + vPos.ToString());
-
-		string sJSON = "{\"source\":\"game\",\"type\":\"WAYPOINT\",\"id\":\"" + sID + "\",\"position\":[" + vPos[0] + "," + vPos[1] + "," + vPos[2] + "],\"wp_type\":\"" + sType + "\"}";
-
 		EnsureRest();
-		LLMBridgeRestCallback cb = CreateCallback("/waypoint");
-		m_Rest.GET(cb, "/waypoint?data=" + UrlEncode(sJSON));
+		LLMBridgeRestCallback cb = CreateCallback("/orders");
+		m_Rest.GET(cb, "/orders");
 	}
 
 	//------------------------------------------------------------------------------------------------
-	void CheckWaypoints(float timeslice)
+	void ProcessOrders(string sData)
 	{
-		for (int i = 0; i < m_aWaypoints.Count(); i++)
+		if (!sData || sData.IsEmpty()) return;
+
+		int cmdIdx = sData.IndexOf("\"cmd\"");
+		if (cmdIdx < 0) return;
+
+		int colonIdx = sData.IndexOfFrom(cmdIdx, ":");
+		if (colonIdx < 0) return;
+
+		// Check for null
+		int nullIdx = sData.IndexOfFrom(colonIdx, "null");
+		if (nullIdx >= 0 && nullIdx < colonIdx + 10) return;
+
+		int valStart = sData.IndexOfFrom(colonIdx, "\"");
+		if (valStart < 0) return;
+		int valEnd = sData.IndexOfFrom(valStart + 1, "\"");
+		if (valEnd < 0) return;
+
+		string cmd = sData.Substring(valStart + 1, valEnd - valStart - 1);
+		Print("[LLMBridge] Live order received: " + cmd);
+
+		if (cmd == "spawn")
 		{
-			LLMWaypoint wp = m_aWaypoints[i];
-			if (!wp.m_bExecuted)
+			Print("[LLMBridge] Executing spawn order...");
+			SCR_AIWorld.LiveSpawnSquad(1);
+		}
+		else if (cmd == "hold")
+		{
+			SetAllOrders("HOLD");
+			ClearSquadWaypoints();
+			Print("[LLMBridge] HOLD order executed");
+		}
+		else if (cmd == "move")
+		{
+			vector offset = "0 0 0";
+			bool hasOffset = false;
+			int offIdx = sData.IndexOf("\"offset\"");
+			if (offIdx >= 0)
 			{
-				float fAge = m_fTime - wp.m_fSpawnTime;
-				if (fAge > 30.0)
+				int offColon = sData.IndexOfFrom(offIdx, ":");
+				int arrStart = sData.IndexOfFrom(offColon, "[");
+				int arrEnd = sData.IndexOfFrom(arrStart, "]");
+				if (arrStart >= 0 && arrEnd >= 0)
 				{
-					wp.m_bExecuted = true;
-					Print("[LLMBridge] Waypoint " + wp.m_sID + " timed out");
+					string arrStr = sData.Substring(arrStart + 1, arrEnd - arrStart - 1);
+					float nums[2];
+					int numCount = 0;
+					int scan = 0;
+					while (scan < arrStr.Length() && numCount < 2)
+					{
+						int comma = arrStr.IndexOfFrom(scan, ",");
+						if (comma < 0) comma = arrStr.Length();
+						string numStr = arrStr.Substring(scan, comma - scan);
+						numStr.Replace(" ", "");
+						if (!numStr.IsEmpty()) { nums[numCount] = numStr.ToFloat(); numCount++; }
+						scan = comma + 1;
+					}
+					if (numCount >= 2) { offset[0] = nums[0]; offset[2] = nums[1]; hasOffset = true; }
 				}
 			}
+			if (hasOffset)
+			{
+				vector squadPos = GetSquadPosition();
+				vector targetPos = squadPos;
+				targetPos[0] = squadPos[0] + offset[0];
+				targetPos[2] = squadPos[2] + offset[2];
+				Print("[LLMBridge] MOVE: squad=" + squadPos + " + offset=" + offset + " = " + targetPos);
+				ExecuteWaypoint("MOVE", targetPos);
+			}
+			else
+			{
+				Print("[LLMBridge] MOVE order but no offset provided");
+			}
+		}
+		else if (cmd == "status")
+		{
+			vector pos = GetSquadPosition();
+			SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+			int agentCount = 0;
+			int memberCount = 0;
+			int wpCount = 0;
+			if (grp)
+			{
+				array<AIAgent> agents = {};
+				grp.GetAgents(agents);
+				agentCount = agents.Count();
+				memberCount = grp.GetPlayerAndAgentCount();
+				array<AIWaypoint> wps = {};
+				grp.GetWaypoints(wps);
+				wpCount = wps.Count();
+			}
+			Print("[LLMBridge] STATUS: pos=" + pos + " members=" + memberCount + " agents=" + agentCount + " waypoints=" + wpCount + " ready=" + BoolStr(m_bLLMReady));
+		}
+		else if (cmd == "prefabs")
+		{
+			Print("[LLMBridge] Checking group prefab slots...");
+			SCR_AIWorld.LogGroupPrefabs();
+		}
+		else if (cmd == "despawn")
+		{
+			Print("[LLMBridge] Despawning all AI...");
+			ClearSquadWaypoints();
+			SCR_AIWorld.LiveDespawnSquad();
+		}
+		else if (cmd == "formation")
+		{
+			// Extract formation name from JSON
+			string formName = "Column";
+			int formIdx = sData.IndexOf("\"formation\"");
+			if (formIdx >= 0)
+			{
+				int formColon = sData.IndexOfFrom(formIdx, ":");
+				int formStart = sData.IndexOfFrom(formColon, "\"");
+				int formEnd = sData.IndexOfFrom(formStart + 1, "\"");
+				if (formStart >= 0 && formEnd >= 0)
+					formName = sData.Substring(formStart + 1, formEnd - formStart - 1);
+			}
+			Print("[LLMBridge] Setting formation: " + formName);
+			SCR_AIWorld.SetGroupFormation(formName);
+		}
+		else if (cmd == "follow")
+		{
+			// Create a Follow waypoint at the leader's position
+			vector leaderPos = GetSquadPosition();
+			Print("[LLMBridge] FOLLOW: creating follow waypoint at " + leaderPos);
+			ExecuteWaypoint("FOLLOW", leaderPos);
+		}
+		else
+		{
+			Print("[LLMBridge] Unknown order: " + cmd);
 		}
 	}
 
-	// ===== Radio Callback (LLM response -> orders) =====
 	//------------------------------------------------------------------------------------------------
 	void OnRadioCallback(string sMessage)
 	{
-		Print("[LLMBridge] Radio callback: " + sMessage);
+		string action = "HOLD";
+		vector offset = "0 0 0";
+		bool hasOffset = false;
 
-		if (sMessage.Contains("HOLD"))
+		int actionIdx = sMessage.IndexOf("\"action\"");
+		if (actionIdx >= 0)
+		{
+			int colonIdx = sMessage.IndexOfFrom(actionIdx, ":");
+			if (colonIdx >= 0)
+			{
+				int valStart = sMessage.IndexOfFrom(colonIdx, "\"");
+				if (valStart >= 0)
+				{
+					int valEnd = sMessage.IndexOfFrom(valStart + 1, "\"");
+					if (valEnd >= 0)
+						action = sMessage.Substring(valStart + 1, valEnd - valStart - 1);
+				}
+			}
+		}
+
+		int posIdx = sMessage.IndexOf("\"target_offset\"");
+		if (posIdx >= 0)
+		{
+			int posColon = sMessage.IndexOfFrom(posIdx, ":");
+			if (posColon >= 0)
+			{
+				int arrStart = sMessage.IndexOfFrom(posColon, "[");
+				if (arrStart >= 0)
+				{
+					int arrEnd = sMessage.IndexOfFrom(arrStart, "]");
+					if (arrEnd >= 0)
+					{
+						string arrStr = sMessage.Substring(arrStart + 1, arrEnd - arrStart - 1);
+						float nums[3];
+						int numCount = 0;
+						int scanStart = 0;
+						while (scanStart < arrStr.Length() && numCount < 3)
+						{
+							int commaIdx = arrStr.IndexOfFrom(scanStart, ",");
+							if (commaIdx < 0) commaIdx = arrStr.Length();
+							string numStr = arrStr.Substring(scanStart, commaIdx - scanStart);
+							numStr.Replace(" ", "");
+							if (!numStr.IsEmpty()) { nums[numCount] = numStr.ToFloat(); numCount++; }
+							scanStart = commaIdx + 1;
+						}
+						if (numCount >= 2) { offset[0] = nums[0]; offset[2] = nums[1]; hasOffset = true; }
+					}
+				}
+			}
+		}
+
+		Print("[LLMBridge] LLM action=" + action + " offset=" + BoolStr(hasOffset));
+
+		if (action == m_sLastAction && action != "HOLD") return;
+		m_sLastAction = action;
+
+		if (action == "HOLD")
+		{
 			SetAllOrders("HOLD");
-		else if (sMessage.Contains("ATTACK"))
-			SetAllOrders("ATTACK");
-		else if (sMessage.Contains("PATROL"))
-			SetAllOrders("PATROL");
+			ClearSquadWaypoints();
+		}
+		else if (action == "MOVE" || action == "ATTACK" || action == "FLANK")
+		{
+			SetAllOrders(action);
+			if (hasOffset)
+			{
+				vector squadPos = GetSquadPosition();
+				vector targetPos = squadPos;
+				targetPos[0] = squadPos[0] + offset[0];
+				targetPos[2] = squadPos[2] + offset[2];
+				ExecuteWaypoint(action, targetPos);
+			}
+			else
+			{
+				Print("[LLMBridge] " + action + " but no offset, holding");
+				SetAllOrders("HOLD");
+			}
+		}
+		else
+		{
+			SetAllOrders("HOLD");
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------
+	vector GetSquadPosition()
+	{
+		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+		if (grp)
+		{
+			array<AIAgent> agents = {};
+			grp.GetAgents(agents);
+			if (agents.Count() > 0)
+			{
+				IEntity ent = agents[0].GetControlledEntity();
+				if (ent) return ent.GetOrigin();
+			}
+		}
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (pm)
+		{
+			IEntity playerEnt = pm.GetPlayerControlledEntity(1);
+			if (playerEnt) return playerEnt.GetOrigin();
+		}
+		return "0 0 0";
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void ExecuteWaypoint(string sAction, vector vPos)
+	{
+		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+		if (!grp) { Print("[LLMBridge] No player group"); return; }
+		if (!Replication.IsServer()) return;
+
+		string prefabName = WP_MOVE;
+		if (sAction == "ATTACK") prefabName = WP_ATTACK;
+		else if (sAction == "DEFEND") prefabName = WP_DEFEND;
+		else if (sAction == "FOLLOW") prefabName = WP_FOLLOW;
+
+		Resource res = Resource.Load(prefabName);
+		if (!res || !res.IsValid()) { Print("[LLMBridge] Bad waypoint prefab"); return; }
+
+		EntitySpawnParams spawnParams = new EntitySpawnParams();
+		spawnParams.TransformMode = ETransformMode.WORLD;
+		spawnParams.Transform[3] = vPos;
+
+		IEntity wpEntity = GetGame().SpawnEntityPrefab(res, GetGame().GetWorld(), spawnParams);
+		AIWaypoint wp = AIWaypoint.Cast(wpEntity);
+		if (!wp) { Print("[LLMBridge] Not an AIWaypoint"); return; }
+
+		wp.SetCompletionRadius(15.0);
+		ClearSquadWaypoints();
+		grp.AddWaypoint(wp);
+		Print("[LLMBridge] Waypoint at " + vPos + " (" + sAction + ")");
+
+		string sID = "WP_" + sAction + "_" + m_aWaypoints.Count();
+		LLMWaypoint lwp = new LLMWaypoint(sID, vPos, sAction);
+		lwp.m_fSpawnTime = m_fTime;
+		m_aWaypoints.Insert(lwp);
+	}
+
+	void ClearSquadWaypoints()
+	{
+		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+		if (!grp) return;
+		array<AIWaypoint> existing = {};
+		grp.GetWaypoints(existing);
+		foreach (AIWaypoint wp : existing)
+		{
+			if (wp) grp.RemoveWaypoint(wp);
+		}
+		if (existing.Count() > 0)
+			Print("[LLMBridge] Cleared " + existing.Count() + " waypoints");
+	}
+
 	void SetAllOrders(string sOrder)
 	{
 		for (int i = 0; i < m_aSquadMembers.Count(); i++)
-		{
 			m_aSquadMembers[i].m_sCurrentOrder = sOrder;
-		}
-		Print("[LLMBridge] All squad orders set to: " + sOrder);
-	}
-
-	// ===== Public API =====
-	//------------------------------------------------------------------------------------------------
-	void SetSquadOrder(string sMemberName, string sOrder)
-	{
-		for (int i = 0; i < m_aSquadMembers.Count(); i++)
-		{
-			if (m_aSquadMembers[i].m_sName == sMemberName)
-			{
-				m_aSquadMembers[i].m_sCurrentOrder = sOrder;
-				Print("[LLMBridge] " + sMemberName + " ordered: " + sOrder);
-				return;
-			}
-		}
-		Print("[LLMBridge] Squad member not found: " + sMemberName);
-	}
-
-	//------------------------------------------------------------------------------------------------
-	void SendSITREPToPython(string sMemberName, string sSITREP)
-	{
-		for (int i = 0; i < m_aSquadMembers.Count(); i++)
-		{
-			if (m_aSquadMembers[i].m_sName == sMemberName)
-			{
-				m_aSquadMembers[i].m_sSITREP = sSITREP;
-				break;
-			}
-		}
-	}
-
-	//------------------------------------------------------------------------------------------------
-	void SetPassiveMode(bool bPassive)
-	{
-		m_bPassiveMode = bPassive;
-		Print("[LLMBridge] Passive mode: " + BoolStr(bPassive));
-	}
-
-	//------------------------------------------------------------------------------------------------
-	void Log(string sMessage)
-	{
-		Print("[LLMBridge] " + sMessage);
 	}
 }

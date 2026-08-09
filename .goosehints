@@ -54,13 +54,32 @@ Never invent these — every single one has already gone wrong once:
 3. **Port sync**: bridge runs on **5001** (config.json, bats, LLMBridge default URL).
 4. **Never commit secrets.** `config.json` (API key) is gitignored + pre-commit blocked; only commit `config.example.json`. Docs must never contain the API key.
 5. Never change the GUID in `addon.gproj` (pre-commit hook blocks this).
-6. **Dedicated server vs listen server (2026-08-09)**: The DS (`ArmaReforgerServer.exe`) CANNOT load local unpublished mods — `-config` + `-addons` are mutually exclusive (`DEFAULT (F): -config cannot be used together with addons!`), `game.mods[]` triggers workshop validation (`Addon was not found on workshop`), and `-addons` alone hangs on `BACKEND: Attempting online Game Config`. For development, use the **listen server**: game client (`ArmaReforgerSteam.exe`) with `-addonsDir <path> -addons <GUID>`, then host via in-game menu. No backend validation needed. `-autoStartScenario` works ONLY on DS, not on game client.
+6. **Dedicated server vs listen server (2026-08-09, UPDATED 2026-08-09)**: The DS (`ArmaReforgerServer.exe`) CANNOT load local unpacked mods. **Comprehensive testing results:**
+   - `-config` + `-addons` = **REJECTED** by hard DS check ("config cannot be used together with addons!") even with `-addonsDir`. BI wiki claims they can be combined but this is outdated for build 190965.
+   - `-world` + `-addons` + `-addonsDir` = mod compiles (5637 files) but DS hangs on "Attempting online Game Config" (no server config).
+   - `game.mods[]` = triggers Steam Workshop validation ("Addon was not found on workshop").
+   - `-config` + `-addonsDir` (no `-addons`) = server starts but mod NOT loaded (5633 = vanilla). DS only loads addons with `.pak` + `resourceDatabase.rdb`.
+   - **Solutions**: (A) Pack mod as `.pak` + `resourceDatabase.rdb` via Workbench → loads as base addon. (B) Publish to Workshop as unlisted → use `game.mods[]`.
+   - **Correct scenarioId**: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` (found via game client log: `PlayGameConfig {Resource: {ECC61978EDCC2B5A}Missions/23_Campaign.conf}`)
+   - DS ports: RPL=2001, RCON=19999, A2S=17777. Full docs: `docs/dedicated-server-setup.md`.
 7. **Play (offline) vs Host (multiplayer) — CRITICAL (2026-08-09)**: When you click **Host** in the scenario menu, the game DESTROYS the first instance and creates a NEW one — WITHOUT loading local mods (5633 = vanilla). When you click **Play** (offline/single-player), the game stays in the SAME instance (5637 = mod loaded). **For mod testing, ALWAYS use Play, not Host.** The modded classes only execute in the Play (offline) path.
 8. **Packed vs unpacked mods (2026-08-09)**: Unpacked mods (loose `.c` files + `addon.gproj`) work correctly for script execution. Packed `.pak` files are recognized (`(packed)` in log) but **do not load modded classes at runtime** — the scripts compile but `Print()` output never appears. Use unpacked for development; packed only for workshop publishing.
 9. **Cached workshop mods (2026-08-09)**: If the user previously joined a community server, 100+ workshop mods may be cached in `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\`. These cause `ADDON_LOAD_ERROR` when starting a scenario. Fix: move them to `addons_disabled/` subfolder. Our mod in `-addonsDir` is separate and unaffected.
 10. **`SCR_AIGroup.IsFull()` does NOT exist** (2026-08-09). Use `GetPlayerAndAgentCount()` vs `GetMaxMembers()` instead. Verified via Doxygen member list.
 11. **REST callback GC (2026-08-09)**: Inline `new RestCallback(...)` passed to `GET()`/`POST()` is garbage-collected before the async HTTP response arrives. Callbacks NEVER fire. Fix: store in `ref array<ref MyCallback> m_aActiveCallbacks` to keep alive. Both `SetOnSuccess` (modern) and `OnSuccess` (deprecated override) fire correctly once the callback survives GC.
 12. **POST body never transmits (2026-08-09)**: `RestContext.POST(cb, path, body)` sends the HTTP request, but the body parameter arrives empty at the server (`Content-Length: 0`). Fix: send data via GET query param (`/sitrep?data=<urlencoded_json>`). Enforce has no built-in URL encoder — write your own (see `LLMBridge.UrlEncode()`).
+13. **Confirmed US soldier prefab (2026-08-09)**: Found in vanilla SDK source code, NOT invented:
+    - `{5B1996C05B1E51A4}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_AR.et` (Automatic Rifleman, armed)
+    - `{2F912ED6E399FF47}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_Unarmed.et` (unarmed)
+    - Source: `SCR_AutotestCommonFixture.c`, `SCR_CareerProfileHUD.c` in vanilla SDK.
+14. **SpawnUnits() does NOT spawn AI (2026-08-09)**: `SCR_AIGroup.SpawnUnits()` uses `m_aUnitPrefabSlots` (editor-set array) to determine what to spawn. `SetNumberOfMembersToSpawn()` only sets a cap (`m_iMaxUnitsToSpawn`), NOT the prefab list. Dynamically found groups have empty `m_aUnitPrefabSlots`. Fix: manual spawn via `SpawnEntityPrefabEx(prefabName, true, world, params)` + `AIControlComponent.GetControlAIAgent()` (NOT `GetAIAgent()`) + `ActivateAI()` + `group.AddAgent(agent)`.
+15. **AIFormationComponent required for squad movement (2026-08-09)**: Without `AIFormationComponent.SetFormation("Column")` (or "Wedge"/"Line"/"StaggeredColumn"), spawned AI soldiers stand still and do not follow the leader. Set formation after spawning:
+    ```c
+    AIFormationComponent fc = AIFormationComponent.Cast(grp.FindComponent(AIFormationComponent));
+    fc.SetFormation("Column");
+    ```
+16. **DS scenarioId (2026-08-09)**: The scenario ID for the DS config is NOT the `.ent` world file. It is: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` (found via game client log `PlayGameConfig`).
+17. **Live orders system (2026-08-09)**: Game polls `GET /orders` every 2s. Bridge queues commands via `POST /orders`. Commands: `spawn`, `hold`, `move` (with `[dx,dz]` offset array), `status`, `despawn`, `formation`, `follow`. Enables debugging without game restart. Offset must be JSON array `[100,50]` not string `"100,50"`.
 
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
@@ -95,6 +114,19 @@ Never invent these — every single one has already gone wrong once:
   - Fixed POST body empty (switched to GET ?data=<urlencoded_json>)
   - E2E: game sends SITREP → bridge parses → LLM processes → response callback fires in game
   - `m_bLLMReady = true` (health check callback fires successfully)
+- ✅ F2.x: Live orders + AI squad spawn (2026-08-09 20:30):
+  - 5 AI soldiers spawn with confirmed prefab `{5B1996C05B1E51A4}Character_US_AR.et`
+  - `SpawnEntityPrefabEx` + `GetControlAIAgent()` + `ActivateAI()` + `AddAgent()` pattern
+  - `AIFormationComponent.SetFormation("Column")` for squad movement
+  - Live orders: spawn, hold, move, status, despawn, formation, follow
+  - LLM: qwen3.6-35b-uncensored (switched from llama3)
+- ✅ DS investigation (2026-08-09 21:00):
+  - DS installed: `Q:\SteamLibrary\steamapps\common\Arma Reforger Server\`
+  - Correct scenarioId: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf`
+  - Vanilla DS starts: RPL:2001, RCON:19999, A2S:17777
+  - `-config` + `-addons` CANNOT be combined (hard DS check)
+  - Mod compiles on DS (5637 files) but needs `.pak` or workshop for loading
+  - Full docs: `docs/dedicated-server-setup.md`
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References
