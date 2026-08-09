@@ -6,17 +6,11 @@
     "game": {
         "name": "LLMSquadDevServer",
         "scenarioId": "{ECC61978EDCC2B5A}Missions/23_Campaign.conf",
-        "visible": true,
+        "visible": false,
         "password": "",
         "passwordAdmin": "llmsquad",
         "maxPlayers": 16,
-        "mods": [
-            {
-                "modId": "66354C398328E4B0",
-                "name": "EE_Dynamic AI Spawner",
-                "version": "1.0.17"
-            }
-        ]
+        "mods": []
     },
     "rcon": {
         "address": "0.0.0.0",

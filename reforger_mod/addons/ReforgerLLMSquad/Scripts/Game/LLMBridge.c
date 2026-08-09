@@ -119,7 +119,7 @@ class LLMBridge
 	{
 		m_sPythonBridgeURL = "http://127.0.0.1:5001";
 		m_sLLMModel = "llama3";
-		m_fSITREPInterval = 10.0;
+		m_fSITREPInterval = 30.0; // 30s — slow LLM needs time, avoid bridge overload
 		m_bLLMReady = false;
 		m_bPassiveMode = false;
 		m_fTime = 0;

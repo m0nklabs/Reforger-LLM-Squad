@@ -247,6 +247,90 @@ modded class SCR_AIWorld
 	}
 
 	//------------------------------------------------------------------------------------------------
+	// F2.x: Move agents from master group to slave group + auto-follow
+	// This is called after SpawnUnits() succeeds to fix MP group visibility
+	static void MoveAgentsToSlaveGroup(int playerID)
+	{
+		SCR_AIGroup grp = s_PlayerGroup;
+		if (!grp) { Print("[AutoSquad] MoveToSlave: no group"); return; }
+
+		array<AIAgent> agents = {};
+		int count = grp.GetAgents(agents);
+		if (count == 0)
+		{
+			Print("[AutoSquad] MoveToSlave: no agents in master group, nothing to move");
+			return;
+		}
+
+		// Ensure slave group exists
+		SCR_AIGroup slaveGroup = EnsureSlaveGroup(grp);
+		if (!slaveGroup)
+		{
+			Print("[AutoSquad] MoveToSlave: failed to create slave group");
+			return;
+		}
+
+		Print("[AutoSquad] MoveToSlave: moving " + count + " agents from master to slave group");
+
+		// Move each agent from master to slave group
+		PlayerManager pm = GetGame().GetPlayerManager();
+		IEntity playerEnt = null;
+		if (pm)
+			playerEnt = pm.GetPlayerControlledEntity(playerID);
+		vector followPos = grp.GetOrigin();
+		if (playerEnt)
+			followPos = playerEnt.GetOrigin();
+
+		int moved = 0;
+		for (int i = 0; i < count; i++)
+		{
+			AIAgent agent = agents[i];
+			if (!agent) continue;
+
+			// Skip if already in slave group
+			if (agent.GetParentGroup() == slaveGroup) continue;
+
+			// Get the controlled entity — needed for AddAgentFromControlledEntity (RPL broadcast)
+			IEntity aiEnt = agent.GetControlledEntity();
+			if (!aiEnt) continue;
+
+			// Remove from master group
+			grp.RemoveAgent(agent);
+
+			// Add to slave group using AddAgentFromControlledEntity (triggers RPL broadcast!)
+			// This is the vanilla pattern from SCR_PlayerControllerGroupComponent.AddAIToSlaveGroup()
+			slaveGroup.AddAgentFromControlledEntity(aiEnt);
+
+			moved++;
+		}
+
+		Print("[AutoSquad] MoveToSlave: " + moved + " agents moved to slave group");
+
+		// Set formation on slave group
+		AIFormationComponent fc = AIFormationComponent.Cast(slaveGroup.FindComponent(AIFormationComponent));
+		if (fc)
+		{
+			fc.SetFormation("Column");
+			Print("[AutoSquad] MoveToSlave: formation set to Column");
+		}
+
+		// Auto-follow: create Follow waypoint at player position
+		Resource followRes = Resource.Load("{A0509D3C4DD4475E}Prefabs/AI/Waypoints/AIWaypoint_Follow.et");
+		if (followRes && followRes.IsValid())
+		{
+			EntitySpawnParams wpParams = new EntitySpawnParams();
+			wpParams.TransformMode = ETransformMode.WORLD;
+			wpParams.Transform[3] = followPos;
+			AIWaypoint followWP = AIWaypoint.Cast(GetGame().SpawnEntityPrefab(followRes, GetGame().GetWorld(), wpParams));
+			if (followWP)
+			{
+				slaveGroup.AddWaypoint(followWP);
+				Print("[AutoSquad] MoveToSlave: auto-follow waypoint created at " + followPos);
+			}
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
 	// F2.x: Set formation on the group
 	static void SetGroupFormation(string formationName)
 	{
@@ -570,8 +654,9 @@ modded class SCR_PlayerController
 			scrGroup.SpawnUnits();
 			Print("[AutoSquad] SpawnUnits() called - 5 AI should spawn near group");
 
-			// Check result after 10s (SpawnUnits may be async)
+			// Check result after 10s and move AI to slave group
 			GetGame().GetCallqueue().CallLater(SCR_AIWorld.LiveSpawnCheck, 10000, false, playerID);
+			GetGame().GetCallqueue().CallLater(SCR_AIWorld.MoveAgentsToSlaveGroup, 12000, false, playerID);
 
 			// F2: Store group reference for LLMBridge waypoint execution
 			SCR_AIWorld.SetPlayerGroup(scrGroup);

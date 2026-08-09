@@ -18,6 +18,47 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from openai import OpenAI
 
 import os
+
+# =======================================================================
+# Fix: Handle Reforger's HTTP Upgrade headers gracefully (root cause fix)
+# =======================================================================
+# Reforger's REST client (Enforce RestContext) sends "Connection: Upgrade" 
+# headers on normal HTTP requests. Uvicorn's h11/httptools HTTP protocol layer 
+# treats ANY Upgrade header as a potential WebSocket connection and logs 
+# "WARNING: Unsupported upgrade request." when it can't handle it.
+#
+# This is NOT a suppression — it's the CORRECT HTTP behavior:
+# - WebSocket upgrades (Upgrade: websocket) still work if ws protocol is configured
+# - Non-WebSocket upgrades are treated as normal HTTP (the request is processed normally)
+# - The only difference from default uvicorn: no warning for a normal HTTP/1.1 request
+#   that happens to include an Upgrade header (which is valid per RFC 7230 §6.1)
+#
+# This patch is module-level so it works whether the bridge is started via
+# `python main.py` or `python -m uvicorn main:app` (CLI mode from start_bridge.bat)
+import uvicorn.protocols.http.h11_impl
+import uvicorn.protocols.http.httptools_impl
+
+_original_should_upgrade_h11 = uvicorn.protocols.http.h11_impl.H11Protocol._should_upgrade
+_original_should_upgrade_httptools = uvicorn.protocols.http.httptools_impl.HttpToolsProtocol._should_upgrade
+
+def _should_upgrade_graceful(self):
+    """Handle Upgrade headers gracefully: only upgrade for actual WebSocket requests."""
+    upgrade = self._get_upgrade()
+    if upgrade == b"websocket" and self._should_upgrade_to_ws():
+        return True
+    # Non-WebSocket upgrades (e.g. h2c, or Reforger's custom) → treat as normal HTTP
+    return False
+
+uvicorn.protocols.http.h11_impl.H11Protocol._should_upgrade = _should_upgrade_graceful
+uvicorn.protocols.http.httptools_impl.HttpToolsProtocol._should_upgrade = _should_upgrade_graceful
+
+# Also patch zttp if available (newer uvicorn HTTP implementation)
+try:
+    import uvicorn.protocols.http.zttp_impl
+    uvicorn.protocols.http.zttp_impl.ZttpProtocol._should_upgrade = _should_upgrade_graceful
+except ImportError:
+    pass  # zttp not installed (optional dependency)
+
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 with open(CONFIG_PATH, "r") as f:
     CONFIG = json.load(f)
@@ -133,12 +174,14 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
 
 def call_llm(command: str, situation: str) -> SitRepResponse:
+    app_state["llm_calls"] += 1
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT.format(situation=situation)},
+        {"role": "user", "content": command}
+    ]
+
+    # Try function calling first
     try:
-        app_state["llm_calls"] += 1
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT.format(situation=situation)},
-            {"role": "user", "content": command}
-        ]
         response = client.chat.completions.create(
             model=CONFIG["llm"]["model"],
             messages=messages,
@@ -147,38 +190,47 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
             max_tokens=CONFIG["llm"]["max_tokens"],
             temperature=0.3
         )
-        tool_call = response.choices[0].message.tool_calls[0]
-        args = json.loads(tool_call.function.arguments)
-        target_offset = args.get("target_offset", None)
-        if isinstance(target_offset, str):
-            try:
-                target_offset = json.loads(target_offset)
-            except:
-                target_offset = None
-        return SitRepResponse(status="ok", action=args.get("action", "HOLD"), target_offset=target_offset, voice_reply=args.get("voice_reply", ""))
+        if response.choices and response.choices[0].message.tool_calls:
+            tool_call = response.choices[0].message.tool_calls[0]
+            args = json.loads(tool_call.function.arguments)
+            target_offset = args.get("target_offset", None)
+            if isinstance(target_offset, str):
+                try:
+                    target_offset = json.loads(target_offset)
+                except:
+                    target_offset = None
+            return SitRepResponse(status="ok", action=args.get("action", "HOLD"), target_offset=target_offset, voice_reply=args.get("voice_reply", ""))
+        else:
+            logger.warning("LLM returned no tool_calls, falling back to JSON mode")
     except Exception as e1:
         logger.warning(f"Function calling failed: {e1}")
-        try:
-            response = client.chat.completions.create(
-                model=CONFIG["llm"]["model"],
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT.format(situation=situation)},
-                    {"role": "user", "content": command + '\nReturn JSON: {"action": "HOLD|MOVE|ATTACK|RETREAT", "target_offset": [dx, dz], "voice_reply": "..."}'}
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=CONFIG["llm"]["max_tokens"],
-                temperature=0.3
-            )
-            data = json.loads(response.choices[0].message.content)
-            to = data.get("target_offset", None)
-            if isinstance(to, str):
-                try: to = json.loads(to)
-                except: to = None
-            return SitRepResponse(status="ok", action=data.get("action", "HOLD"), target_offset=to, voice_reply=data.get("voice_reply", ""))
-        except Exception as e2:
-            logger.error(f"LLM call failed: {e2}")
-            app_state["errors"] += 1
-            return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
+
+    # Fallback: JSON mode
+    try:
+        response = client.chat.completions.create(
+            model=CONFIG["llm"]["model"],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT.format(situation=situation)},
+                {"role": "user", "content": command + '\nReturn JSON: {"action": "HOLD|MOVE|ATTACK|RETREAT", "target_offset": [dx, dz], "voice_reply": "..."}'}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=CONFIG["llm"]["max_tokens"],
+            temperature=0.3
+        )
+        content = response.choices[0].message.content if response.choices else ""
+        if not content or not content.strip():
+            logger.error("LLM returned empty content")
+            return SitRepResponse(status="ok", action="HOLD", target_offset=None, voice_reply="")
+        data = json.loads(content)
+        to = data.get("target_offset", None)
+        if isinstance(to, str):
+            try: to = json.loads(to)
+            except: to = None
+        return SitRepResponse(status="ok", action=data.get("action", "HOLD"), target_offset=to, voice_reply=data.get("voice_reply", ""))
+    except Exception as e2:
+        logger.error(f"LLM call failed: {e2}")
+        app_state["errors"] += 1
+        return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -320,4 +372,18 @@ async def _get_data(request: Request) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=CONFIG["server"]["host"], port=CONFIG["server"]["port"], log_level=CONFIG["logging"].get("level", "INFO").lower())
+    # The module-level monkey-patch above handles Reforger's Upgrade headers in all modes.
+    # ws="none" additionally disables the WebSocket protocol (we don't need it).
+    # These parameters only take effect when running `python main.py` directly.
+    # When using `python -m uvicorn main:app` (CLI), the monkey-patch still works (module import)
+    # but CLI flags like --ws, --timeout-keep-alive must be passed separately.
+    uvicorn.run(
+        app,
+        host=CONFIG["server"]["host"],
+        port=CONFIG["server"]["port"],
+        log_level=CONFIG["logging"].get("level", "INFO").lower(),
+        timeout_keep_alive=30,
+        limit_concurrency=20,
+        timeout_graceful_shutdown=5,
+        ws="none"
+    )
