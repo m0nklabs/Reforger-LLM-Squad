@@ -68,6 +68,72 @@ Remaining warnings (deliberately kept, fully functional):
 - `'OnSuccess'/'OnError' is obsolete: Use RestCallback.SetOnSuccess()` — deprecated
   override style, still works. Cleanup = later.
 
+## Dedicated Server vs Listen Server (2026-08-09)
+
+The **dedicated server** (`ArmaReforgerServer.exe`) **cannot load local unpublished mods**:
+
+| Approach | Result |
+|---|---|
+| `-config` + `game.mods[]` with local GUID | `BACKEND (E): Addon was not found on workshop` → crash |
+| `-config` + `-addons` CLI | `DEFAULT (F): -config cannot be used together with addons!` → crash |
+| No `-config` + `-addons` CLI | Mod loads (5637 files) but server hangs at `BACKEND: Attempting online Game Config` |
+| `-config` + `-addonsDir` (no `-addons`) | Server starts fine but mod NOT loaded (5633 = vanilla) |
+
+**For development, use the listen server** (game exe + `-addonsDir` + `-addons` + host via in-game menu).
+The listen server does NOT validate mods against the BI workshop backend.
+
+**For production**, publish as unlisted workshop mod (Workbench GUI → Publish → visibility: unlisted).
+
+## Play (offline) vs Host (multiplayer) — CRITICAL (2026-08-09)
+
+This was the final blocker for F1.2. The game client has two ways to start a scenario:
+
+| Action | Game instance | Mod loaded? | Scripts run? |
+|---|---|---|---|
+| **Play** (offline/single-player) | SAME instance (no destroy) | ✅ 5637 files | ✅ All modded classes execute |
+| **Host** (multiplayer/listen server) | NEW instance (destroys first) | ❌ 5633 files (vanilla) | ❌ No modded classes |
+
+**Always use Play (offline) for mod testing.** The `-addons` CLI parameter only applies to the first
+game instance. When you click Host, the engine destroys the main-menu instance and creates a new
+one with only the base game addons — your mod is "available" but not "loaded."
+
+Log evidence:
+```
+# Play (offline) — WORKS:
+12:48:08.046 DEFAULT: Entered offline game state.
+12:48:08.184 [LLMGameMode] OnGameStart - Initializing LLM Bridge  ← MOD RUNS
+
+# Host (multiplayer) — MOD LOST:
+12:58:08.135 ENGINE: Game destroyed.
+12:58:09.446 Module: Game; loaded 5633x files  ← VANILLA, NO MOD
+```
+
+## Packed vs Unpacked Mods (2026-08-09)
+
+**Use unpacked mods for development.** Packed `.pak` files compile correctly but modded classes
+do NOT execute at runtime — `Print()` output never appears in logs.
+
+| Form | Compiles? | Modded classes run? | Use for |
+|---|---|---|---|
+| Unpacked (loose .c + addon.gproj) | ✅ 5637 files | ✅ Print() output appears | Development |
+| Packed (.pak + addon.gproj + .rdb) | ✅ 5637 files | ❌ No Print() output | Workshop publishing only |
+
+The `data.pak` must be generated via Workbench CLI for workshop publishing, but should NOT be
+present in the development addons directory. If both `Scripts/` and `data.pak` exist, the engine
+loads the packed version and modded classes silently fail.
+
+## Cached Workshop Mods (2026-08-09)
+
+If the user previously joined a community server, 100+ workshop mods may be cached in:
+`C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\`
+
+These cause `ADDON_LOAD_ERROR` and `error_failed_to_start_with_mods` when starting a scenario.
+Fix: move all cached mod folders to an `addons_disabled/` subfolder:
+```powershell
+Move-Item 'C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\*' '...\addons_disabled\'
+```
+Our mod loaded via `-addonsDir` is separate and unaffected.
+
 ## Next step (F1.2 from PROJECT_PLAN)
 
 `LLMBridge` is not instantiated anywhere yet -> NO `[LLMBridge]` lines appear in-game.

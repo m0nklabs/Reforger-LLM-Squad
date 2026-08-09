@@ -24,10 +24,16 @@ modded class SCR_BaseGameMode
     ref LLMAutoConnect m_pAutoConnect;
 
     //------------------------------------------------------------------------------------------------
+    override void EOnInit(IEntity owner)
+    {
+        super.EOnInit(owner);
+        Print("[LLMGameMode] EOnInit FIRED — modded SCR_BaseGameMode is alive");
+    }
+
+    //------------------------------------------------------------------------------------------------
     override void OnGameStart()
     {
         Print("[LLMGameMode] OnGameStart - Initializing LLM Bridge");
-        
         if (m_bLLMInitialized)
             return;
         

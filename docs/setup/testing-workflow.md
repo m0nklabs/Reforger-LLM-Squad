@@ -39,89 +39,78 @@ curl http://127.0.0.1:5001/status
 
 Expected response: `{"status": "ok"}` or similar.
 
-### Step 3: Launch the server
+### Step 3: Launch the game client (NOT dedicated server)
+
+> ⚠️ **CRITICAL**: The dedicated server CANNOT load local unpublished mods.
+> Use the game client with `-addonsDir` + `-addons` for development.
 
 ```cmd
-start "Reforger Dedicated Server" /d "Q:\GAMES\Reforger-LLM-Squad\tools\ds1874900" ^
-    ArmaReforgerServer.exe ^
-    -config server.json ^
-    -profile server_profile ^
-    -backendlog ^
-    -nothrow ^
+start "" /d "Q:\SteamLibrary\steamapps\common\Arma Reforger" ^
+    "Q:\SteamLibrary\steamapps\common\Arma Reforger\ArmaReforgerSteam.exe" ^
+    -addonsDir "Q:\GAMES\Reforger-LLM-Squad\reforger_mod\addons" ^
+    -addons "7E5A1C9B3D8F2406" ^
     -log
 ```
 
-### Step 4: Wait for server initialization
+Or simply:
+```cmd
+cd Q:\GAMES\Reforger-LLM-Squad && launch_reforger.bat
+```
 
-**Wait 20–30 seconds** for the server to fully initialize.
+### Step 4: Wait for game initialization
 
-The server needs time to:
-- Load the base game addons
-- Load our mod addon
-- Initialize the game world
-- Start the RCON listener
-- Register with the master server
+**Wait ~50 seconds** for the game to fully initialize and reach the main menu.
 
-### Step 5: Verify server startup via log
-
-Check the latest server log for success indicators:
+### Step 5: Verify mod loaded via log
 
 ```cmd
 powershell -NoProfile -File scripts\check_latest_log.ps1
 ```
 
-**Success indicators** (look for these in the log):
+**Success indicators:**
 
 | Indicator | Meaning |
 |---|---|
-| `Entered online game state` | Server successfully initialized the game world |
-| `RCON Init` | RCON listener started successfully |
-| `[LLMSquad]` | Our mod script is running (if component wiring is done) |
-| No `SCRIPT (E)` errors in our script files | Our Enforce Script compiled without errors |
+| `Loaded addons: ... 7E5A1C9B3D8F2406` | Our mod is loaded |
+| `Module: Game; loaded 5637x files` | 5637 = mod loaded (5633 = vanilla, mod NOT loaded) |
+| `Entered main menu` | Game reached main menu |
+| No `SCRIPT (E)` in our files | Compiled without errors |
 
-**Failure indicators:**
+### Step 6: Start scenario with Play (NOT Host!)
 
-| Indicator | Meaning |
-|---|---|
-| Log file size ~1145 bytes | Crash — engine failed to initialize |
-| `Unable to initialize the game` | Fatal initialization error |
-| `Can't find '58D0FB3206B6F859'` | Base game addon not found (working directory issue) |
-| `Can't find '7E5A1C9B3D8F2406'` | Our mod addon not found (addons path issue) |
-| `Engine Initialization Error` | Cascade from one of the above |
+> ⚠️ **CRITICAL (2026-08-09)**: Use **Play** (offline), NOT **Host** (multiplayer).
+> Host destroys the game instance and reloads vanilla (5633 files, no mod).
+> Play keeps the same instance (5637 files, mod active).
 
-### Step 6: Connect the client
+In-game:
+1. Click **Play**
+2. Go to **Scenarios** tab
+3. Select **Conflict: Everon** (Campaign)
+4. Click **Play** (NOT Host!)
+5. Wait for world to load
+6. Spawn in the game
 
-```cmd
-ArmaReforgerSteam.exe -connect 127.0.0.1:2001
+### Step 7: Verify modded classes executed
+
+After spawning, check the log for our `Print()` output:
+
+```powershell
+$logFile = (Get-ChildItem 'C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs' -Directory | 
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName + '\console.log'
+Get-Content $logFile | Select-String -Pattern 'AutoSquad|LLMGameMode|LLMBridge'
 ```
 
-> Using `-connect` bypasses the server browser, which:
-> - Avoids downloading unwanted workshop subscriptions from other servers
-> - Is faster for development iteration
-> - Connects directly to the local server
-
-### Step 7: Verify client-side behavior
-
-After the client loads (10–20 seconds), verify in-game:
-
-| Feature | How to verify |
-|---|---|
-| Mod loaded | Check client log for our mod GUID |
-| Auto-squad (F1.2) | 5 AI squad members appear near player |
-| Menu access | Game reaches main menu without crash |
-| REST connectivity | `[LLMBridge]` lines in client log |
-
-### Step 8: Check client log
-
-```cmd
-powershell -NoProfile -File scripts\check_latest_log.ps1
+**Expected output:**
+```
+[AutoSquad] SCR_AIWorld.EOnInit FIRED
+[LLMGameMode] EOnInit FIRED
+[LLMGameMode] OnGameStart - Initializing LLM Bridge
+[AutoSquad] Player 1 entity changed, scheduling squad spawn
+[AutoSquad] SUCCESS: Auto-squad complete
+[LLMBridge] LLM Bridge activated, periodic updates started
 ```
 
-Or manually inspect the latest log:
-
-```
-C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\logs_<timestamp>\console.log
-```
+If you see `Game destroyed` + `5633x files` → you used Host instead of Play.
 
 ---
 

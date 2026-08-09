@@ -68,6 +68,22 @@ start "" /d "<game_dir>" "<game_dir>\ArmaReforgerSteam.exe" -addonsDir "<parent-
 | Scripts | compiled from source at game start | shipped inside the pak |
 | `resourceDatabase.rdb` warning | harmless (cache gets created) | — |
 | Loading | `-addonsDir` + `-addons`, or Workbench Play | Workshop / in-game manager |
+| **Modded classes execute?** | **✅ YES — Print() appears in logs** | **❌ NO — Print() never appears (dev only)** |
+
+> ⚠️ **CRITICAL (2026-08-09)**: Packed `.pak` files compile but modded classes do NOT execute at runtime.
+> For development, ALWAYS use unpacked (loose .c files). Delete `data.pak` and `resourceDatabase.rdb`
+> from the mod folder if present. Only pack for workshop publishing.
+
+## 5. Play (offline) vs Host (multiplayer) — CRITICAL
+
+> ⚠️ **CRITICAL (2026-08-09)**: This was the final blocker for F1.2.
+
+| Action | Game instance | Mod loaded? | Scripts run? |
+|---|---|---|---|
+| **Play** (offline) | SAME instance | ✅ 5637 files | ✅ All modded classes |
+| **Host** (multiplayer) | NEW instance (destroys first) | ❌ 5633 (vanilla) | ❌ None |
+
+**Always use Play (offline) for mod testing.** Host destroys the instance and reloads without `-addons`.
 
 ## 5. Recommended tooling
 

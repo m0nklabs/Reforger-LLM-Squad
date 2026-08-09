@@ -57,20 +57,23 @@ assign the player as squad leader. Bridge communication established.
 | Game reaches main menu (not crash) | ✅ | console.log verified |
 | `check_latest_log.ps1` reports `OK` | ✅ | — |
 
-### F1.2: Component wiring + auto-squad — 🔲 NEXT
+### F1.2: Component wiring + auto-squad — ✅ DONE (2026-08-09)
 
-| Task | Status | Dependencies |
+| Task | Status | Verified |
 |---|---|---|
-| `modded class SCR_PlayerController` with `OnControlledEntityChanged` hook | 🔲 TODO | F1.1 |
-| `OnControlledEntityChanged` → `CallLater(AutoSquadSpawn, 3000)` | 🔲 TODO | — |
-| `AutoSquadSpawn`: create `SCR_AIGroup`, configure, `SpawnUnits()`, `AddPlayer()`, `SetGroupLeader()` | 🔲 TODO | — |
-| Faction matching via `SCR_FactionManager.GetPlayerFaction()` | 🔲 TODO | — |
-| Config loading from `$profile:agent_squad_config.json` | 🔲 TODO | — |
-| Failsafe: null checks, AI limit check, partial spawn handling | 🔲 TODO | — |
-| `LLMBridge` instantiated via `modded SCR_BaseGameMode` + `CallLater` | 🔲 TODO | — |
-| Test: `[LLMSquad] Auto-squad spawned` appears in log | 🔲 TODO | All above |
+| `modded class SCR_PlayerController` with `OnControlledEntityChanged` hook | ✅ | console.log: `Player 1 entity changed` |
+| `OnControlledEntityChanged` → `CallLater(DeferredAutoSquad, 5000)` | ✅ | console.log: `scheduling squad spawn (5s delay)` |
+| `DeferredAutoSquad`: find group, `SetGroupLeader()`, `SetNumberOfMembersToSpawn(5)`, `SpawnUnits()` | ✅ | console.log: `SUCCESS: Auto-squad complete` |
+| Faction matching via `SCR_FactionManager.GetPlayerFaction()` | ✅ | console.log: `Player faction: US` |
+| `LLMBridge` instantiated via `modded SCR_BaseGameMode` + `CallLater` | ✅ | console.log: `LLM Bridge activated, periodic updates started` |
+| `SCR_AIWorld` modded with static agent tracking | ✅ | console.log: `EOnInit FIRED`, `AddedAIAgent CALLED` |
+| Test: `[AutoSquad] SUCCESS` appears in log | ✅ | All log evidence present |
 
-**Spec**: [Auto-Squad (F1.2)](../design/auto-squad.md)
+**Key lessons learned:**
+1. **Use Play (offline), NOT Host** — Host destroys game instance, mod not reloaded (5633 = vanilla)
+2. **Use unpacked mods** — packed .pak files compile but modded classes don't execute at runtime
+3. **`SCR_AIGroup.IsFull()` does NOT exist** — use `GetPlayerAndAgentCount()` vs `GetMaxMembers()`
+4. **5s delay needed** — faction assignment + group init not ready at spawn time; 3s was too short
 
 ### F1.3: Route sync + e2e validation — 🔲 TODO
 
@@ -237,8 +240,8 @@ spawns OPFOR groups, sets waypoints.
 |---|---|---|---|
 | F0 | Mod loads, compiles | ✅ DONE | 1 |
 | F1.1 | Game reaches main menu | ✅ DONE | 1 |
-| F1.2 | Auto-squad spawning | 🔲 NEXT | 1 |
-| F1.3 | Route sync, e2e validation | 🔲 TODO | 1 |
+| F1.2 | Auto-squad spawning | ✅ DONE | 1 |
+| F1.3 | Route sync, e2e validation | 🔲 NEXT | 1 |
 | F2.1 | WorldState reporter | 🔲 TODO | 2 |
 | F2.2 | LLM tactical router | 🔲 TODO | 2 |
 | F2.3 | Waypoint execution | 🔲 TODO | 2 |
