@@ -372,11 +372,15 @@ async def _get_data(request: Request) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    # The module-level monkey-patch above handles Reforger's Upgrade headers in all modes.
-    # ws="none" additionally disables the WebSocket protocol (we don't need it).
-    # These parameters only take effect when running `python main.py` directly.
-    # When using `python -m uvicorn main:app` (CLI), the monkey-patch still works (module import)
-    # but CLI flags like --ws, --timeout-keep-alive must be passed separately.
+    # The module-level monkey-patch above handles Reforger's Upgrade headers
+    # in ALL modes (CLI and python main.py). It silently treats non-WebSocket
+    # Upgrade headers as normal HTTP (RFC 7230 §6.1) without logging warnings.
+    #
+    # We do NOT use ws="none" because it sets ws_protocol_class=None, which
+    # triggers uvicorn's "No supported WebSocket library detected" warning.
+    # Since the websockets library IS installed, we let uvicorn auto-detect it.
+    # The monkey-patch ensures only Upgrade: websocket is treated as a WS upgrade;
+    # Reforger's non-WS Upgrade headers pass through as normal HTTP.
     uvicorn.run(
         app,
         host=CONFIG["server"]["host"],
@@ -385,5 +389,4 @@ if __name__ == "__main__":
         timeout_keep_alive=30,
         limit_concurrency=20,
         timeout_graceful_shutdown=5,
-        ws="none"
     )
