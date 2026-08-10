@@ -80,6 +80,13 @@ client = OpenAI(
     timeout=float(CONFIG["llm"]["timeout_seconds"])
 )
 
+# Phase 2: Voice pipeline (Whisper STT + PTT key)
+from voice_handler import VoiceHandler
+voice_handler = VoiceHandler(
+    CONFIG.get("voice", {}),
+    on_transcription=None  # set in lifespan after call_llm is available
+)
+
 # --- Pydantic Models ---
 
 class SitRepMember(BaseModel):
@@ -434,8 +441,31 @@ async def lifespan(app: FastAPI):
         logger.info(f"Proxy connection OK: {test_response.model}")
     except Exception as e:
         logger.warning(f"Proxy connection failed: {e}")
+
+    # Phase 2: Start voice handler if enabled
+    def on_voice_transcription(text: str):
+        """Called when PTT release transcribes speech to text."""
+        logger.info(f"[Voice] Transcription: \"{text}\" → forwarding to LLM")
+        situation = get_situation_text(app_state.get("last_sitrep")) if app_state.get("last_sitrep") else "No squad data."
+        response = call_llm(command=text, situation=situation)
+        # Queue the LLM response as a pending order for the game to pick up
+        order = {
+            "cmd": "move" if response.action in ("MOVE", "ENGAGE", "FLANK") else response.action.lower(),
+            "action": response.action,
+            "offset": response.target_offset,
+            "voice_reply": response.voice_reply,
+            "source": "voice",
+            "transcription": text
+        }
+        app_state["pending_orders"].append(order)
+        logger.info(f"[Voice] LLM response queued: action={response.action}, offset={response.target_offset}")
+
+    voice_handler._on_transcription = on_voice_transcription
+    voice_handler.start()
+
     yield
     logger.info("=== Reforger LLM Bridge Shutting Down ===")
+    voice_handler.stop()
 
 app = FastAPI(title="Reforger LLM Squad Control", version="2.0.0", lifespan=lifespan)
 
@@ -650,6 +680,13 @@ def generate_stavka_orders(opfor_count: int = -1):
 async def get_stavka(opfor: int = -1):
     result = generate_stavka_orders(opfor_count=opfor)
     return result
+
+# =======================================================================
+# /voice — Phase 2: Voice pipeline status
+# =======================================================================
+@app.get("/voice")
+async def voice_status():
+    return voice_handler.get_status()
 
 async def _get_data(request: Request) -> dict:
     raw = await request.body()
