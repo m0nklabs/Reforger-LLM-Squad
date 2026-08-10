@@ -172,6 +172,8 @@ app_state = {
     "stavka_cycles": 0,
     "last_stavka_fingerprint": None,
     "cached_stavka_orders": None,
+    # Player activity tracking
+    "last_sitrep_time": time.time(),  # updated on every SITREP; LLM skipped if stale > 90s
 }
 
 def get_situation_text(sitrep: SitRepRequest) -> str:
@@ -297,6 +299,10 @@ def generate_ai_thoughts():
     if not sitrep or not sitrep.squad:
         return {"thoughts": []}
 
+    # Safety net: skip LLM if no SITREPs received in 90s (no active players)
+    if time.time() - app_state.get("last_sitrep_time", 0) > 90:
+        return {"thoughts": []}
+
     assign_personalities(sitrep.squad)
 
     # Dedup: skip LLM if situation unchanged
@@ -419,6 +425,8 @@ async def health_check():
         "sitreps_received": app_state["sitrep_count"], "commands_received": app_state["command_count"],
         "pending_orders": len(app_state["pending_orders"]),
         "sitreps_skipped_llm": app_state.get("sitrep_skipped", 0),
+        "players_active": (time.time() - app_state.get("last_sitrep_time", 0)) < 90,
+        "secs_since_last_sitrep": round(time.time() - app_state.get("last_sitrep_time", 0), 1),
         "proxy": CONFIG["llm"]["base_url"], "model": CONFIG["llm"]["model"]
     }
 
@@ -451,6 +459,7 @@ async def post_orders(request: Request):
 @app.post("/sitrep")
 async def receive_sitrep(request: Request):
     app_state["sitrep_count"] += 1
+    app_state["last_sitrep_time"] = time.time()
     data = await _get_data(request)
     if data:
         try:
@@ -563,6 +572,10 @@ def generate_stavka_orders(opfor_count: int = -1):
     sitrep = app_state.get("last_sitrep")
     if not sitrep or not sitrep.squad:
         return {"orders": []}
+
+    # Safety net: skip LLM if no SITREPs received in 90s (no active players)
+    if time.time() - app_state.get("last_sitrep_time", 0) > 90:
+        return {"orders": [{"action": "hold", "tactic": "no_players"}]}
 
     # F3.3: Include OPFOR count in fingerprint — casualty changes trigger new LLM calls
     fp = _sitrep_fingerprint(sitrep) + f"|opfor={opfor_count}"

@@ -26,6 +26,9 @@ modded class SCR_BaseGameMode
     // F3.1: Stavka OPFOR strategic AI
     ref StavkaController m_pStavka;
 
+    // Player presence tracking — pause LLM when no human players
+    bool m_bNoPlayerMode;
+
     //------------------------------------------------------------------------------------------------
     override void EOnInit(IEntity owner)
     {
@@ -73,6 +76,38 @@ modded class SCR_BaseGameMode
     //------------------------------------------------------------------------------------------------
     void PeriodicUpdate(float timeslice)
     {
+        // Check if any human player is connected (scan player IDs 1-32)
+        bool hasPlayer = false;
+        PlayerManager pm = GetGame().GetPlayerManager();
+        if (pm)
+        {
+            for (int i = 1; i <= 32; i++)
+            {
+                if (pm.GetPlayerControlledEntity(i))
+                {
+                    hasPlayer = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasPlayer)
+        {
+            // No human player — skip all LLM activity to save resources
+            if (!m_bNoPlayerMode)
+            {
+                m_bNoPlayerMode = true;
+                Print("[LLMGameMode] No human players detected — pausing all LLM activity");
+            }
+            return;
+        }
+
+        if (m_bNoPlayerMode)
+        {
+            m_bNoPlayerMode = false;
+            Print("[LLMGameMode] Player detected — resuming LLM activity");
+        }
+
         if (!m_pLLMBridge)
             return;
         
