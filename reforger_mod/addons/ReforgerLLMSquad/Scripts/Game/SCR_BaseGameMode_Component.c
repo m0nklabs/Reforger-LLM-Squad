@@ -23,6 +23,9 @@ modded class SCR_BaseGameMode
     // Auto-connect component
     ref LLMAutoConnect m_pAutoConnect;
 
+    // F3.1: Stavka OPFOR strategic AI
+    ref StavkaController m_pStavka;
+
     //------------------------------------------------------------------------------------------------
     override void EOnInit(IEntity owner)
     {
@@ -56,6 +59,10 @@ modded class SCR_BaseGameMode
             Print("[LLMGameMode] ERROR: Failed to create LLMBridge instance");
         }
 
+        // F3.1: Stavka OPFOR strategic AI — strategic cycle every 60s
+        m_pStavka = new StavkaController("http://127.0.0.1:5001");
+        Print("[LLMGameMode] Stavka controller initialized");
+
         // --- Auto-connect hook (F1.x: auto server connection via profile JSON) ---
         // Delayed to let BackendApi / authentication initialize before we call GetBackendApi()
         m_pAutoConnect = new LLMAutoConnect();
@@ -74,6 +81,10 @@ modded class SCR_BaseGameMode
         
         // Update the LLMBridge - This handles SITREP collection, waypoint checks, etc.
         m_pLLMBridge.Update(timeslice);
+
+        // F3.1: Update Stavka controller (OPFOR strategic AI)
+        if (m_pStavka)
+            m_pStavka.Update(timeslice);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -103,7 +114,12 @@ modded class SCR_BaseGameMode
         {
             m_pLLMBridge = null;
         }
-        
+
+        if (m_pStavka)
+        {
+            m_pStavka = null;
+        }
+
         if (m_pAutoConnect)
         {
             m_pAutoConnect = null;

@@ -168,6 +168,10 @@ app_state = {
     "cached_thoughts": None,         # cached thoughts for unchanged situation
     "last_thought_fingerprint": None,
     "thought_calls": 0,
+    # F3.1: Stavka OPFOR AI
+    "stavka_cycles": 0,
+    "last_stavka_fingerprint": None,
+    "cached_stavka_orders": None,
 }
 
 def get_situation_text(sitrep: SitRepRequest) -> str:
@@ -534,6 +538,74 @@ async def receive_waypoint(request: Request):
 @app.get("/ai_thought")
 async def get_ai_thought():
     result = generate_ai_thoughts()
+    return result
+
+# =======================================================================
+# F3.1: Stavka OPFOR strategic AI
+# =======================================================================
+STAVKA_PROMPT = """You are a Soviet Stavka strategic AI commander in Arma Reforger.
+You command OPFOR (USSR) forces opposing BLUFOR (US Army).
+
+Based on the BLUFOR situation, decide how to deploy OPFOR forces.
+Keep forces small (2-5 soldiers per group). Offsets are relative to BLUFOR position [dx, dz] in meters.
+- positive dx = east, negative dx = west
+- positive dz = south, negative dz = north
+
+Return JSON: {"orders": [{"action": "spawn_and_move", "count": 3, "offset": [200, -100], "tactic": "aggressive"}]}
+Actions: spawn_and_move (spawn N soldiers at offset from BLUFOR), hold (maintain current forces)
+Tactics: aggressive, flanking, defensive, ambush"""
+
+def generate_stavka_orders():
+    """Generate strategic OPFOR orders based on last SITREP."""
+    sitrep = app_state.get("last_sitrep")
+    if not sitrep or not sitrep.squad:
+        return {"orders": []}
+
+    # Dedup: skip if situation unchanged
+    fp = _sitrep_fingerprint(sitrep)
+    if fp == app_state["last_stavka_fingerprint"] and app_state["cached_stavka_orders"]:
+        app_state["stavka_cycles"] += 1
+        return app_state["cached_stavka_orders"]
+
+    app_state["last_stavka_fingerprint"] = fp
+    app_state["stavka_cycles"] += 1
+    app_state["llm_calls"] += 1
+
+    situation = get_situation_text(sitrep)
+    prompt = f"BLUFOR situation:\n{situation}\n\nIssue OPFOR strategic orders. Return JSON only."
+
+    try:
+        response = client.chat.completions.create(
+            model=CONFIG["llm"]["model"],
+            messages=[
+                {"role": "system", "content": STAVKA_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=200,
+            temperature=0.5
+        )
+        content = response.choices[0].message.content if response.choices else ""
+        if content and content.strip():
+            data = json.loads(content)
+            orders = data.get("orders", [])
+            result = {"orders": orders}
+            app_state["cached_stavka_orders"] = result
+            logger.info(f"Stavka: generated {len(orders)} strategic orders (cycle #{app_state['stavka_cycles']})")
+            for o in orders:
+                logger.info(f"  Stavka order: {o}")
+            return result
+        else:
+            logger.warning("Stavka: LLM returned empty content")
+    except Exception as e:
+        logger.error(f"Stavka generation failed: {e}")
+        app_state["errors"] += 1
+
+    return {"orders": []}
+
+@app.get("/stavka")
+async def get_stavka():
+    result = generate_stavka_orders()
     return result
 
 async def _get_data(request: Request) -> dict:
