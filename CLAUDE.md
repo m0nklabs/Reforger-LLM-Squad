@@ -102,6 +102,8 @@ Never invent these — every single one has already gone wrong once:
 25. **F3.1/F3.2: Stavka OPFOR Strategic AI (2026-08-10)**: LLM-driven OPFOR forces. Bridge `/stavka` endpoint generates strategic orders (JSON: `{"orders":[{"action":"spawn_and_move","count":2,"offset":[300,0],"tactic":"flanking"}]}`, uses `response_format={"type":"json_object"}`, temperature=0.5, dedup via fingerprint). Game's `StavkaController.c` polls every 60s, spawns USSR Rifleman (`{DCB41B3746FDD1BE}Prefabs/Characters/OPFOR/USSR_Army/Character_USSR_Rifleman.et`) into AI groups with `AddAgentFromControlledEntity()` + delayed `ActivateAI(500ms)` (rule 21). OPFOR cap: `MAX_OPFOR=10` via `CountAliveOPFOR()` counting agents across tracked groups. Move waypoint: `{750A8D1695BD6998}Prefabs/AI/Waypoints/AIWaypoint_Move.et` at BLUFOR position. Formation Wedge via `AIFormationComponent.SetFormation("Wedge")`. Verified on DS: zero crashes, zero SCRIPT(E), OPFOR spawn + move + formation all functional.
 26. **`ref` arrays with engine classes (2026-08-10)**: In Enforce Script, `ref` (strong reference) is only valid for script-defined classes. Engine classes (like `SCR_AIGroup`, `IEntity`, `AIAgent`) CANNOT use `ref` as element type — compilation error: "Strong ref to 'SCR_AIGroup' class is not allowed". However, the array itself IS a script object and NEEDS `ref` — without it: "Variable is not strong ref (missing 'ref'?)". Correct: `ref array<SCR_AIGroup>`. Wrong: `ref array<ref SCR_AIGroup>` (element ref fails) or `array<SCR_AIGroup>` (missing array ref).
 
+27. **F3.3: Stavka Feedback Loop (2026-08-10)**: OPFOR strength reported to bridge via query param GET /stavka?opfor=N. Bridge includes OPFOR count in fingerprint (count changes trigger new LLM calls). LLM prompt includes current OPFOR strength and adapts strategy: 0=spawn aggressive, 5=HOLD+reinforce from flank, 8=HOLD (adequate). Game casualty detection every 10s via CountAliveOPFOR() - if count drops, triggers immediate poll. Verified: LLM adapts strategy based on OPFOR strength, 0 crashes.
+
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
 
@@ -157,6 +159,7 @@ Never invent these — every single one has already gone wrong once:
   - RPL:2001, RCON:19999, A2S:17777 all active with mod loaded
 - F3.1 (2026-08-10): Stavka OPFOR Strategic AI - LLM decides OPFOR strategy every 60s. Bridge /stavka endpoint -> StavkaController.c -> spawns USSR Rifleman soldiers. Verified on DS.
 - F3.2 (2026-08-10): OPFOR Waypoint Assignment - soldiers grouped into AI groups, formation Wedge, Move waypoint toward BLUFOR. OPFOR cap (MAX_OPFOR=10) via CountAliveOPFOR(). Zero SCRIPT(E), verified on DS with 2 cycles.
+ - F3.3 (2026-08-10): Feedback Loop - OPFOR count sent to bridge (GET ?opfor=N), LLM adapts strategy (spawn when weak, hold when sufficient), casualty detection triggers early polls
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References

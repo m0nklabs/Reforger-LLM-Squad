@@ -47,6 +47,11 @@ class StavkaController
 
 	float m_fTimer;
 	static const float STAVKA_INTERVAL = 60.0; // 60s between strategic cycles
+	static const float CASUALTY_CHECK_INTERVAL = 10.0; // 10s between casualty checks
+
+	// F3.3: Track last OPFOR count for casualty detection
+	int m_iLastOPFORCount;
+	float m_fCasualtyTimer;
 
 	string m_sBridgeURL;
 
@@ -57,6 +62,8 @@ class StavkaController
 		m_aCallbacks = new array<ref StavkaRestCallback>;
 		m_aOPFORGroups = new array<SCR_AIGroup>;
 		m_fTimer = 0;
+		m_fCasualtyTimer = 0;
+		m_iLastOPFORCount = 0;
 		Print("[Stavka] Controller initialized (bridge=" + bridgeURL + ")");
 	}
 
@@ -68,6 +75,21 @@ class StavkaController
 		{
 			m_fTimer = 0;
 			PollStavka();
+			return;
+		}
+
+		// F3.3: Casualty check - if OPFOR count drops, trigger immediate poll
+		m_fCasualtyTimer += timeslice;
+		if (m_fCasualtyTimer >= CASUALTY_CHECK_INTERVAL)
+		{
+			m_fCasualtyTimer = 0;
+			int currentOPFOR = CountAliveOPFOR();
+			if (m_iLastOPFORCount > 0 && currentOPFOR < m_iLastOPFORCount)
+			{
+				int casualties = m_iLastOPFORCount - currentOPFOR;
+				Print("[Stavka] CASUALTY REPORT: " + casualties + " OPFOR lost (" + currentOPFOR + "/" + m_iLastOPFORCount + " remaining) — triggering immediate strategic poll");
+				m_fTimer = STAVKA_INTERVAL; // Force immediate poll
+			}
 		}
 	}
 
@@ -80,13 +102,17 @@ class StavkaController
 			Print("[Stavka] REST context created");
 		}
 
+		// F3.3: Send current OPFOR count to bridge for adaptive strategy
+		int opforCount = CountAliveOPFOR();
+		m_iLastOPFORCount = opforCount;
+
 		StavkaRestCallback cb = new StavkaRestCallback(this);
 		m_aCallbacks.Insert(cb);
 		while (m_aCallbacks.Count() > 10)
 			m_aCallbacks.RemoveOrdered(0);
 
-		m_Rest.GET(cb, "/stavka");
-		Print("[Stavka] Polling bridge for strategic orders");
+		m_Rest.GET(cb, "/stavka?opfor=" + opforCount);
+		Print("[Stavka] Polling bridge for strategic orders (OPFOR=" + opforCount + ")");
 	}
 
 	//------------------------------------------------------------------------------------------------

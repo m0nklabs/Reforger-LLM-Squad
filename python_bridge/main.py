@@ -546,23 +546,26 @@ async def get_ai_thought():
 STAVKA_PROMPT = """You are a Soviet Stavka strategic AI commander in Arma Reforger.
 You command OPFOR (USSR) forces opposing BLUFOR (US Army).
 
-Based on the BLUFOR situation, decide how to deploy OPFOR forces.
+Based on the BLUFOR situation and your current OPFOR strength, decide tactical orders.
 Keep forces small (2-5 soldiers per group). Offsets are relative to BLUFOR position [dx, dz] in meters.
 - positive dx = east, negative dx = west
 - positive dz = south, negative dz = north
+
+If your OPFOR strength is low (losses), order reinforcements (spawn_and_move).
+If your OPFOR strength is adequate, hold position or maneuver strategically.
 
 Return JSON: {"orders": [{"action": "spawn_and_move", "count": 3, "offset": [200, -100], "tactic": "aggressive"}]}
 Actions: spawn_and_move (spawn N soldiers at offset from BLUFOR), hold (maintain current forces)
 Tactics: aggressive, flanking, defensive, ambush"""
 
-def generate_stavka_orders():
-    """Generate strategic OPFOR orders based on last SITREP."""
+def generate_stavka_orders(opfor_count: int = -1):
+    """Generate strategic OPFOR orders based on last SITREP + current OPFOR strength."""
     sitrep = app_state.get("last_sitrep")
     if not sitrep or not sitrep.squad:
         return {"orders": []}
 
-    # Dedup: skip if situation unchanged
-    fp = _sitrep_fingerprint(sitrep)
+    # F3.3: Include OPFOR count in fingerprint — casualty changes trigger new LLM calls
+    fp = _sitrep_fingerprint(sitrep) + f"|opfor={opfor_count}"
     if fp == app_state["last_stavka_fingerprint"] and app_state["cached_stavka_orders"]:
         app_state["stavka_cycles"] += 1
         return app_state["cached_stavka_orders"]
@@ -572,7 +575,8 @@ def generate_stavka_orders():
     app_state["llm_calls"] += 1
 
     situation = get_situation_text(sitrep)
-    prompt = f"BLUFOR situation:\n{situation}\n\nIssue OPFOR strategic orders. Return JSON only."
+    opfor_info = f"Current OPFOR strength: {opfor_count} soldiers alive" if opfor_count >= 0 else "OPFOR strength unknown"
+    prompt = f"BLUFOR situation:\n{situation}\n{opfor_info}\n\nIssue OPFOR strategic orders. Reinforce if losses are high. Return JSON only."
 
     try:
         response = client.chat.completions.create(
@@ -604,8 +608,8 @@ def generate_stavka_orders():
     return {"orders": []}
 
 @app.get("/stavka")
-async def get_stavka():
-    result = generate_stavka_orders()
+async def get_stavka(opfor: int = -1):
+    result = generate_stavka_orders(opfor_count=opfor)
     return result
 
 async def _get_data(request: Request) -> dict:
