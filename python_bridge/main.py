@@ -9,6 +9,7 @@ F2.x: Live orders — /orders endpoint for real-time debugging without game rest
 
 import json
 import time
+import math
 import logging
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -90,6 +91,8 @@ class SitRepRequest(BaseModel):
     source: str = "game"
     type: str = "SITREP"
     squad: List[SitRepMember] = []
+    enemies: List[dict] = []  # F3.4: enemy positions (dx, dz, dist relative to squad)
+    enemy_count: int = 0
     model_config = ConfigDict(extra="allow")
 
 class CommandRequest(BaseModel):
@@ -126,11 +129,11 @@ ISSUE_ORDER_FUNCTION = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD"]},
+            "action": {"type": "string", "enum": ["ENGAGE", "MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD"]},
             "target_offset": {
                 "type": "array",
                 "items": {"type": "number"},
-                "description": "Relative offset [dx, dz] in meters from squad position."
+                "description": "Relative offset [dx, dz] in meters from squad position. For ENGAGE, point toward the enemy."
             },
             "voice_reply": {"type": "string"}
         },
@@ -148,7 +151,8 @@ Respond with valid JSON only. Direction guide for target_offset [dx, dz]:
 - West  = negative dx, e.g. [-100, 0]
 - North = negative dz, e.g. [0, -100]
 - South = positive dz, e.g. [0, 100]
-Keep offsets 50-300m. No enemies nearby = HOLD with [0, 0]."""
+Keep offsets 50-300m. No enemies nearby = HOLD with [0, 0].
+If enemies are detected, ENGAGE with offset toward nearest enemy, or FLANK to approach from the side, or RETREAT if outnumbered."""
 
 app_state = {
     "last_sitrep": None,
@@ -188,6 +192,24 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
             lines.append(f"Squad position: {pos}")
     for m in sitrep.squad:
         lines.append(f"  {m.name}: order={m.order}, sitrep={m.sitrep}")
+    # F3.4: Enemy contact info
+    if sitrep.enemy_count > 0 and sitrep.enemies:
+        lines.append(f"ENEMY CONTACT: {sitrep.enemy_count} hostiles detected:")
+        for e in sitrep.enemies[:5]:  # max 5 enemies in prompt to save tokens
+            dx = e.get("dx", 0)
+            dz = e.get("dz", 0)
+            dist = e.get("dist", 0)
+            # Convert to compass direction
+            compass = "unknown"
+            if dist > 0:
+                angle = math.degrees(math.atan2(-dz, dx))
+                if angle < 0: angle += 360
+                dirs = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
+                idx = int((angle + 22.5) / 45) % 8
+                compass = dirs[idx]
+            lines.append(f"  Enemy {dist:.0f}m {compass} (offset dx={dx:.0f}, dz={dz:.0f})")
+    else:
+        lines.append("No enemy contacts reported.")
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
 
 def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
@@ -200,6 +222,10 @@ def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
         pos = sitrep.model_extra.get("position")
         if pos and isinstance(pos, list) and len(pos) >= 2:
             parts.append(f"pos={int(pos[0]//50)*50},{int(pos[2] if len(pos)>2 else pos[1])//50*50}")
+    # F3.4: Include enemy count + rough positions in fingerprint
+    parts.append(f"enemies={sitrep.enemy_count}")
+    for e in sitrep.enemies[:5]:
+        parts.append(f"e{int(e.get('dx',0)//50)}:{int(e.get('dz',0)//50)}")
     return "|".join(parts)
 
 def call_llm(command: str, situation: str) -> SitRepResponse:

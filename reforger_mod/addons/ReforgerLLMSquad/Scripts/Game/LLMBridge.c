@@ -291,12 +291,32 @@ class LLMBridge
 			if (s.IsEmpty()) s = "clear";
 			sJSON += "{\"name\":\"" + m_aSquadMembers[i].m_sName + "\",\"order\":\"" + m_aSquadMembers[i].m_sCurrentOrder + "\",\"sitrep\":\"" + s + "\"}";
 		}
-		sJSON += "]}";
+		sJSON += "]";
+
+		// F3.4: Add enemy info from StavkaController OPFOR groups
+		int enemyCount = 0;
+		string sEnemies = "[";
+		if (g_StavkaInstance)
+		{
+			array<vector> enemyPos = g_StavkaInstance.GetEnemyPositions();
+			enemyCount = enemyPos.Count();
+			for (int e = 0; e < enemyPos.Count(); e++)
+			{
+				if (e > 0) sEnemies += ",";
+				// Calculate relative offset from squad
+				float dx = enemyPos[e][0] - squadPos[0];
+				float dz = enemyPos[e][2] - squadPos[2];
+				float dist = Math.Sqrt(dx * dx + dz * dz);
+				sEnemies += "{\"dx\":" + dx + ",\"dz\":" + dz + ",\"dist\":" + dist + "}";
+			}
+		}
+		sEnemies += "]";
+		sJSON += ",\"enemies\":" + sEnemies + ",\"enemy_count\":" + enemyCount + "}";
 
 		EnsureRest();
 		LLMBridgeRestCallback cb = CreateCallback("/sitrep");
 		m_Rest.GET(cb, "/sitrep?data=" + UrlEncode(sJSON));
-		Print("[LLMBridge] SITREP sent (pos=" + squadPos + ")");
+		Print("[LLMBridge] SITREP sent (pos=" + squadPos + ", enemies=" + enemyCount + ")");
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -515,8 +535,11 @@ class LLMBridge
 			SetAllOrders("HOLD");
 			ClearSquadWaypoints();
 		}
-		else if (action == "MOVE" || action == "ATTACK" || action == "FLANK")
+		else if (action == "MOVE" || action == "ATTACK" || action == "FLANK" || action == "ENGAGE" || action == "SUPPRESS" || action == "RETREAT")
 		{
+			if (action == "SUPPRESS") action = "ATTACK";
+			if (action == "RETREAT") action = "MOVE";
+			if (action == "ENGAGE") action = "ATTACK";
 			SetAllOrders(action);
 			if (hasOffset)
 			{

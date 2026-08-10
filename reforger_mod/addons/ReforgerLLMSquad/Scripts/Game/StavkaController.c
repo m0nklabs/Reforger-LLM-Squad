@@ -5,6 +5,9 @@
 //   {DCB41B3746FDD1BE}Prefabs/Characters/OPFOR/USSR_Army/Character_USSR_Rifleman.et
 // Source: SCR_DebugEditorComponent.c
 
+// F3.4: Global singleton for cross-class access (LLMBridge reads OPFOR positions)
+StavkaController g_StavkaInstance;
+
 //------------------------------------------------------------------------------------------------
 // Simple REST callback for Stavka (avoids cross-file dependency on LLMBridgeRestCallback)
 class StavkaRestCallback : RestCallback
@@ -64,6 +67,7 @@ class StavkaController
 		m_fTimer = 0;
 		m_fCasualtyTimer = 0;
 		m_iLastOPFORCount = 0;
+		g_StavkaInstance = this;
 		Print("[Stavka] Controller initialized (bridge=" + bridgeURL + ")");
 	}
 
@@ -417,5 +421,26 @@ class StavkaController
 			alive += agents.Count();
 		}
 		return alive;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// F3.4: Get all OPFOR agent positions for enemy detection
+	// Returns array of vector positions of alive OPFOR soldiers
+	array<vector> GetEnemyPositions()
+	{
+		array<vector> positions = {};
+		for (int i = 0; i < m_aOPFORGroups.Count(); i++)
+		{
+			SCR_AIGroup grp = m_aOPFORGroups[i];
+			if (!grp) continue;
+			array<AIAgent> agents = {};
+			grp.GetAgents(agents);
+			for (int j = 0; j < agents.Count(); j++)
+			{
+				IEntity ent = agents[j].GetControlledEntity();
+				if (ent) positions.Insert(ent.GetOrigin());
+			}
+		}
+		return positions;
 	}
 }
