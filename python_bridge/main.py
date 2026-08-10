@@ -314,61 +314,57 @@ def generate_ai_thoughts():
     prompt = f"Situation:\n{situation}\n\nSquad members:\n{members_text}\n\nGenerate one thought per member."
 
     try:
-        # Use function calling for reliable structured output
+        # Simple prompt — let model output plain text, parse line by line
+        # 3B models struggle with complex JSON schemas, so keep it simple
+        simple_prompt = f"""Generate one short thought (max 15 words) for each squad member based on their personality and the situation. 
+
+Format each as: [Name] thought text
+
+Squad members:
+{members_text}
+
+Situation: {situation}
+
+Output:"""
+        
         response = client.chat.completions.create(
             model=CONFIG["llm"]["model"],
             messages=[
-                {"role": "system", "content": AI_THOUGHT_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "You generate personality-driven thoughts for AI soldiers. Each member has a personality that shapes their thoughts. Be concise and in-character."},
+                {"role": "user", "content": simple_prompt}
             ],
-            tools=[{"type": "function", "function": {
-                "name": "generate_thoughts",
-                "description": "Generate one thought per squad member.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "thoughts": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "name": {"type": "string"},
-                                    "thought": {"type": "string"},
-                                    "mood": {"type": "string"}
-                                },
-                                "required": ["name", "thought"]
-                            }
-                        }
-                    },
-                    "required": ["thoughts"]
-                }
-            }}],
-            tool_choice={"type": "function", "function": {"name": "generate_thoughts"}},
-            max_tokens=300,
-            temperature=0.7
+            max_tokens=200,
+            temperature=0.8
         )
         
-        # Try function calling result first
-        if response.choices and response.choices[0].message.tool_calls:
-            tc = response.choices[0].message.tool_calls[0]
-            data = json.loads(tc.function.arguments)
-            thoughts = data.get("thoughts", [])
-            if not isinstance(thoughts, list):
-                thoughts = []
-        else:
-            # Fallback: parse content as JSON
-            content = response.choices[0].message.content if response.choices else ""
-            if content and content.strip():
-                data = json.loads(content)
-                thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
-                if not isinstance(thoughts, list):
-                    thoughts = []
-            else:
-                logger.warning("AI thought: LLM returned no tool_calls and empty content")
-                return {"thoughts": []}
+        content = response.choices[0].message.content if response.choices else ""
+        if not content or not content.strip():
+            logger.warning("AI thought: LLM returned empty content")
+            return {"thoughts": []}
+        
+        # Parse plain text: [Name] thought text  OR  Name: thought
+        thoughts = []
+        for line in content.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Try [Name] thought format
+            if "[" in line and "]" in line:
+                b_start = line.index("[")
+                b_end = line.index("]", b_start)
+                name = line[b_start+1:b_end].strip()
+                thought = line[b_end+1:].lstrip(":").strip()
+                if name and thought:
+                    thoughts.append({"name": name, "thought": thought, "mood": "neutral"})
+            elif ":" in line:
+                colon_idx = line.index(":")
+                name = line[:colon_idx].strip()
+                thought = line[colon_idx+1:].strip()
+                if name and thought and len(name) < 20:
+                    thoughts.append({"name": name, "thought": thought, "mood": "neutral"})
         
         if not thoughts:
-            logger.warning("AI thought: LLM returned empty thoughts array")
+            logger.warning(f"AI thought: could not parse thoughts from: {content[:100]}")
             return {"thoughts": []}
         
         result = {"thoughts": thoughts}
@@ -376,10 +372,7 @@ def generate_ai_thoughts():
         app_state["llm_calls"] += 1
         logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
         for t in thoughts:
-            name = t.get("name", "?")
-            thought_text = t.get("thought", "")[:80]
-            mood = t.get("mood", "?")
-            logger.info(f"  [{name} ({mood})] {thought_text}")
+            logger.info(f"  [{t['name']}] {t['thought'][:80]}")
         return result
     except Exception as e:
         logger.error(f"AI thought generation failed: {e}")
