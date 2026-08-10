@@ -163,6 +163,11 @@ app_state = {
     "last_sitrep_fingerprint": None,  # dedup: skip LLM if situation unchanged
     "last_llm_response": None,       # cached response for unchanged situations
     "sitrep_skipped": 0,             # count of skipped LLM calls
+    # F2.7: Individual AI brains
+    "ai_personalities": {},           # name -> personality (assigned on first SITREP)
+    "cached_thoughts": None,         # cached thoughts for unchanged situation
+    "last_thought_fingerprint": None,
+    "thought_calls": 0,
 }
 
 def get_situation_text(sitrep: SitRepRequest) -> str:
@@ -250,7 +255,101 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
         app_state["errors"] += 1
         return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
 
-@asynccontextmanager
+        return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
+
+# =======================================================================
+# F2.7: Individual AI Brains — personality + thought generation
+# =======================================================================
+PERSONALITIES = ["AGGRESSIVE", "CAUTIOUS", "JOKER", "VETERAN", "ROOKIE", "STEADY"]
+
+AI_THOUGHT_SYSTEM_PROMPT = """You generate internal thoughts for AI squad members in Arma Reforger.
+Each member has a personality. Generate ONE short thought per member (max 15 words).
+
+Personalities:
+- AGGRESSIVE: wants to attack, push forward, impatient
+- CAUTIOUS: worried about ambushes, wants cover, overwatch
+- JOKER: cracks jokes, lightens the mood, doesn't take things seriously
+- VETERAN: calm, experienced, tactical observations
+- ROOKIE: nervous, eager to prove themselves, asks questions
+- STEADY: professional, focused, mission-oriented
+
+When the situation is quiet/clear, members may chat with squadmates naturally.
+When in combat, thoughts should be tactical and urgent.
+Return JSON: {"thoughts": [{"name": "Alpha_1", "thought": "...", "mood": "..."}]}
+Moods: alert, bored, nervous, confident, annoyed, scared, calm, excited."""
+
+def assign_personalities(squad):
+    """Assign stable personalities to squad members (deterministic by name)."""
+    import hashlib
+    for m in squad:
+        if m.name not in app_state["ai_personalities"]:
+            h = int(hashlib.md5(m.name.encode()).hexdigest(), 16)
+            personality = PERSONALITIES[h % len(PERSONALITIES)]
+            app_state["ai_personalities"][m.name] = personality
+
+def generate_ai_thoughts():
+    """Generate thoughts for all squad members based on last SITREP. One LLM call for all."""
+    sitrep = app_state.get("last_sitrep")
+    if not sitrep or not sitrep.squad:
+        return {"thoughts": []}
+
+    assign_personalities(sitrep.squad)
+
+    # Dedup: skip LLM if situation unchanged
+    fp = _sitrep_fingerprint(sitrep)
+    if fp == app_state["last_thought_fingerprint"] and app_state["cached_thoughts"]:
+        return app_state["cached_thoughts"]
+
+    app_state["last_thought_fingerprint"] = fp
+    app_state["thought_calls"] += 1
+
+    # Build member descriptions
+    member_lines = []
+    for m in sitrep.squad:
+        p = app_state["ai_personalities"].get(m.name, "STEADY")
+        member_lines.append(f"- {m.name} ({p}): order={m.order}, sitrep={m.sitrep}")
+
+    situation = get_situation_text(sitrep)
+    members_text = "\n".join(member_lines)
+    prompt = f"Situation:\n{situation}\n\nSquad members:\n{members_text}\n\nGenerate one thought per member."
+
+    try:
+        response = client.chat.completions.create(
+            model=CONFIG["llm"]["model"],
+            messages=[
+                {"role": "system", "content": AI_THOUGHT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=250,
+            temperature=0.7
+        )
+        content = response.choices[0].message.content if response.choices else ""
+        if content and content.strip():
+            data = json.loads(content)
+            thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
+            if not isinstance(thoughts, list):
+                thoughts = []
+            result = {"thoughts": thoughts}
+            app_state["cached_thoughts"] = result
+            app_state["llm_calls"] += 1
+            logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
+            for t in thoughts:
+                name = t.get("name", "?")
+                thought = t.get("thought", "")[:80]
+                mood = t.get("mood", "?")
+                logger.info(f"  [{name} ({mood})] {thought}")
+            return result
+    except Exception as e:
+        logger.error(f"AI thought generation failed: {e}")
+        app_state["errors"] += 1
+
+    return {"thoughts": []}
+
+# =======================================================================
+# /ai_thought — F2.7: Individual AI Brains
+# Game polls this endpoint to get thoughts for each AI squad member
+# =======================================================================
 async def lifespan(app: FastAPI):
     logger.info("=== Reforger LLM Bridge Starting ===")
     logger.info(f"Proxy URL: {CONFIG['llm']['base_url']}")
@@ -389,7 +488,15 @@ async def receive_waypoint(request: Request):
         app_state["last_waypoint"] = data
     return {"status": "ok", "timestamp": time.time()}
 
-async def _get_data(request: Request) -> dict:
+    return {"status": "ok", "timestamp": time.time()}
+
+# =======================================================================
+# /ai_thought — F2.7: Individual AI Brains
+# =======================================================================
+@app.get("/ai_thought")
+async def get_ai_thought():
+    result = generate_ai_thoughts()
+    return result
     raw = await request.body()
     if raw:
         try: return json.loads(raw)

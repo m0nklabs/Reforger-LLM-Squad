@@ -106,6 +106,7 @@ class LLMBridge
 	float m_fStatusTimer;
 	float m_fHealthCheckTimer;
 	float m_fOrdersTimer;
+	float m_fThoughtTimer;    // F2.7: AI brain thoughts
 	string m_sLastAction;
 
 	// Waypoint prefabs
@@ -127,6 +128,7 @@ class LLMBridge
 		m_fStatusTimer = 0;
 		m_fHealthCheckTimer = 0;
 		m_fOrdersTimer = 0;
+		m_fThoughtTimer = 0;
 
 		m_aSquadMembers = new array<ref LLMSquadMember>;
 		m_aSquadMembers.Insert(new LLMSquadMember("Alpha_1"));
@@ -215,6 +217,17 @@ class LLMBridge
 			PollOrders();
 		}
 
+		// F2.7: AI brain thoughts — poll every 30s (offset from SITREP by 5s)
+		if (m_bLLMReady)
+		{
+			m_fThoughtTimer += timeslice;
+			if (m_fThoughtTimer >= 30.0)
+			{
+				m_fThoughtTimer = 0;
+				PollThoughts();
+			}
+		}
+
 		if (!m_bLLMReady)
 		{
 			m_fHealthCheckTimer += timeslice;
@@ -241,6 +254,10 @@ class LLMBridge
 		else if (sEndpoint == "/orders")
 		{
 			ProcessOrders(sData);
+		}
+		else if (sEndpoint == "/ai_thought")
+		{
+			ProcessThoughts(sData);
 		}
 	}
 
@@ -292,6 +309,13 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
+	void PollOrders()
+	{
+		EnsureRest();
+		LLMBridgeRestCallback cb = CreateCallback("/orders");
+		m_Rest.GET(cb, "/orders");
+	}
+
 	void PollOrders()
 	{
 		EnsureRest();
@@ -597,4 +621,67 @@ class LLMBridge
 		for (int i = 0; i < m_aSquadMembers.Count(); i++)
 			m_aSquadMembers[i].m_sCurrentOrder = sOrder;
 	}
-}
+
+	//------------------------------------------------------------------------------------------------
+	// F2.7: Individual AI Brains — poll and display thoughts
+	void PollThoughts()
+	{
+		EnsureRest();
+		LLMBridgeRestCallback cb = CreateCallback("/ai_thought");
+		m_Rest.GET(cb, "/ai_thought");
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void ProcessThoughts(string sData)
+	{
+		if (!sData || sData.IsEmpty()) return;
+
+		// Parse JSON: {"thoughts": [{"name": "Alpha_1", "thought": "...", "mood": "..."}, ...]}
+		// Simple string-based parser (Enforce has no JSON library)
+		int scanPos = 0;
+		int thoughtCount = 0;
+
+		while (scanPos < sData.Length())
+		{
+			// Find next "name" field
+			int nameIdx = sData.IndexOfFrom(scanPos, "\"name\"");
+			if (nameIdx < 0) break;
+
+			// Extract name value
+			int nameColon = sData.IndexOfFrom(nameIdx, ":");
+			if (nameColon < 0) break;
+			int nameStart = sData.IndexOfFrom(nameColon, "\"");
+			if (nameStart < 0) break;
+			int nameEnd = sData.IndexOfFrom(nameStart + 1, "\"");
+			if (nameEnd < 0) break;
+
+			string name = sData.Substring(nameStart + 1, nameEnd - nameStart - 1);
+
+			// Find "thought" field after this name
+			int thoughtIdx = sData.IndexOfFrom(nameEnd, "\"thought\"");
+			if (thoughtIdx < 0) break;
+			int thoughtColon = sData.IndexOfFrom(thoughtIdx, ":");
+			if (thoughtColon < 0) break;
+			int thoughtStart = sData.IndexOfFrom(thoughtColon, "\"");
+			if (thoughtStart < 0) break;
+			int thoughtEnd = sData.IndexOfFrom(thoughtStart + 1, "\"");
+			if (thoughtEnd < 0) break;
+
+			string thought = sData.Substring(thoughtStart + 1, thoughtEnd - thoughtStart - 1);
+
+			// Display via chat
+			string chatMsg = "[" + name + "] " + thought;
+
+			// Try chat display (may work on client, may not on DS)
+			SCR_ChatComponent.RadioProtocolMessage(chatMsg);
+
+			// Always log
+			Print("[LLMBridge] AI thought: " + chatMsg);
+
+			thoughtCount++;
+			scanPos = thoughtEnd + 1;
+		}
+
+		if (thoughtCount > 0)
+			Print("[LLMBridge] Processed " + thoughtCount + " AI thoughts");
+	}
