@@ -1,7 +1,7 @@
 """
 Standalone test client for Reforger LLM Bridge.
 Tests the bridge WITHOUT Arma Reforger running.
-Simulates game SITREP, orders, AI thoughts, and Stavka strategic AI.
+Simulates game SITREP, orders, AI thoughts, Stavka strategic AI, and voice handler.
 
 Usage:
     python test_client.py          # run all tests
@@ -92,8 +92,8 @@ def test_sitrep_with_enemies():
             {"name": "Alpha_4", "order": "HOLD", "sitrep": "clear"},
         ],
         "enemies": [
-            {"dx": 250.0, "dz": 0.0, "dist": 250.0},   # 250m East
-            {"dx": 180.0, "dz": -100.0, "dist": 206.0},  # 206m NE
+            {"dx": 250.0, "dz": 0.0, "dist": 250.0},
+            {"dx": 180.0, "dz": -100.0, "dist": 206.0},
         ],
         "enemy_count": 2,
     }
@@ -120,12 +120,10 @@ def test_orders():
     """Test /orders GET (poll) and POST (queue command)"""
     print("\n=== Test: Orders (poll + queue) ===")
     try:
-        # POST a command
         cmd = {"cmd": "spawn", "count": 3, "prefab": "us_ar"}
         resp = requests.post(f"{BRIDGE_URL}/orders", json=cmd, timeout=5)
         print(f"  POST /orders: {resp.status_code}")
 
-        # GET pending orders
         resp = requests.get(f"{BRIDGE_URL}/orders", timeout=5)
         data = resp.json()
         orders = data.get("orders", [])
@@ -173,8 +171,27 @@ def test_stavka():
         return False
 
 
+def test_voice():
+    """Test /voice endpoint (voice handler status)"""
+    print("\n=== Test: Voice Handler ===")
+    try:
+        resp = requests.get(f"{BRIDGE_URL}/voice", timeout=5)
+        data = resp.json()
+        print(f"  Enabled: {data.get('enabled', False)}")
+        print(f"  PTT key: {data.get('ptt_key', '?')}")
+        print(f"  Model: {data.get('model', '?')} (loaded={data.get('model_loaded', False)})")
+        print(f"  Running: {data.get('running', False)}")
+        if data.get("last_transcription"):
+            print(f"  Last: \"{data['last_transcription']}\"")
+        print("[PASS]")
+        return True
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
+
 def test_latency():
-    """Measure end-to-end latency for SITREP→LLM→response"""
+    """Measure end-to-end latency for SITREP -> LLM -> response"""
     print("\n=== Test: Latency ===")
     payload = {
         "source": "test_client",
@@ -187,10 +204,9 @@ def test_latency():
         "enemies": [],
         "enemy_count": 0,
     }
-    # Force unique fingerprint each call
     latencies = []
     for i in range(3):
-        payload["position"][0] = 500.0 + i * 100  # change position to avoid dedup
+        payload["position"][0] = 500.0 + i * 100
         start = time.time()
         try:
             resp = requests.get(
@@ -233,6 +249,7 @@ def main():
             "orders": test_orders,
             "thought": test_ai_thought,
             "stavka": test_stavka,
+            "voice": test_voice,
             "latency": test_latency,
         }
         if test_name in test_map:
@@ -250,6 +267,7 @@ def main():
     results.append(("Orders", test_orders()))
     results.append(("AI Thoughts", test_ai_thought()))
     results.append(("Stavka", test_stavka()))
+    results.append(("Voice", test_voice()))
     results.append(("Latency", test_latency()))
 
     # Summary

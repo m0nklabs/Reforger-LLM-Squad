@@ -4,6 +4,16 @@ echo  Reforger LLM Squad Control - Launcher
 echo ========================================
 echo.
 
+REM Phase 2: Voice pipeline requires admin for global keyboard hook
+REM Check if we have admin rights, if not, auto-elevate
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [WARN] Voice pipeline needs admin for PTT key capture.
+    echo        Requesting elevation...
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
+)
+
 REM Check if Python bridge is already running
 netstat -ano | findstr ":5001" >nul 2>&1
 if %errorlevel% equ 0 (
