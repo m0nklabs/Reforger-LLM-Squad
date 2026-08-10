@@ -316,13 +316,6 @@ class LLMBridge
 		m_Rest.GET(cb, "/orders");
 	}
 
-	void PollOrders()
-	{
-		EnsureRest();
-		LLMBridgeRestCallback cb = CreateCallback("/orders");
-		m_Rest.GET(cb, "/orders");
-	}
-
 	//------------------------------------------------------------------------------------------------
 	void ProcessOrders(string sData)
 	{
