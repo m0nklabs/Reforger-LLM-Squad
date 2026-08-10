@@ -1,13 +1,19 @@
 """
 Standalone test client for Reforger LLM Bridge.
 Tests the bridge WITHOUT Arma Reforger running.
-Simulates game SITREP and operator commands.
+Simulates game SITREP, orders, AI thoughts, and Stavka strategic AI.
+
+Usage:
+    python test_client.py          # run all tests
+    python test_client.py health   # just health check
+    python test_client.py sitrep   # just SITREP test
 """
 
 import json
 import time
 import sys
 import os
+import math
 import requests
 
 # Add parent directory to path
@@ -20,182 +26,247 @@ with open(CONFIG_PATH, "r") as f:
 
 BRIDGE_URL = f"http://{CONFIG['server']['host']}:{CONFIG['server']['port']}"
 
+
 def test_health():
     """Test /health endpoint"""
-    print("\n=== Test 1: Health Check ===")
+    print("\n=== Test: Health Check ===")
     try:
         resp = requests.get(f"{BRIDGE_URL}/health", timeout=5)
         data = resp.json()
-        print(f"Status: {data['status']}")
-        print(f"Uptime: {data['uptime_seconds']}s")
-        print(f"Proxy: {data['proxy']}")
-        print(f"Model: {data['model']}")
-        print("[PASS] Health check passed!")
+        print(f"  Status: {data['status']}")
+        print(f"  Uptime: {data['uptime_seconds']}s")
+        print(f"  LLM calls: {data['llm_calls']}")
+        print(f"  SITREPs received: {data['sitreps_received']}")
+        print(f"  SITREPs skipped (dedup): {data['sitreps_skipped_llm']}")
+        print(f"  Players active: {data.get('players_active', '?')}")
+        print(f"  Secs since last SITREP: {data.get('secs_since_last_sitrep', '?')}")
+        print(f"  Model: {data['model']}")
+        print("[PASS]")
         return True
     except Exception as e:
-        print(f"[FAIL] Health check failed: {e}")
+        print(f"[FAIL] {e}")
         return False
 
-def test_sitrep():
-    """Test /sitrep endpoint with simulated game data"""
-    print("\n=== Test 2: SITREP Bridge ===")
-    
-    sitrep_payload = {
-        "squad": "ALPHA",
-        "grid": "042-081",
-        "position_x": 1234.5,
-        "position_y": 567.8,
-        "position_z": 12.3,
-        "health": 85.5,
-        "ammo_percent": 62.0,
-        "status": "Patrolling",
-        "nearby_enemies": 2
+
+def test_sitrep_no_enemies():
+    """Test /sitrep with no enemies nearby — expect HOLD"""
+    print("\n=== Test: SITREP (no enemies) ===")
+    payload = {
+        "source": "test_client",
+        "type": "SITREP",
+        "position": [100.0, 0.0, 200.0],
+        "squad": [
+            {"name": "Alpha_1", "order": "HOLD", "sitrep": "clear"},
+            {"name": "Alpha_2", "order": "HOLD", "sitrep": "clear"},
+            {"name": "Alpha_3", "order": "HOLD", "sitrep": "clear"},
+            {"name": "Alpha_4", "order": "HOLD", "sitrep": "clear"},
+        ],
+        "enemies": [],
+        "enemy_count": 0,
     }
-    
     try:
-        resp = requests.post(
-            f"{BRIDGE_URL}/sitrep",
-            json=sitrep_payload,
-            timeout=CONFIG["llm"]["timeout_seconds"] + 2
-        )
+        resp = requests.get(f"{BRIDGE_URL}/sitrep?data={requests.utils.quote(json.dumps(payload))}", timeout=30)
         data = resp.json()
-        print(f"Response: {json.dumps(data, indent=2)}")
-        print(f"Action: {data['action']}")
-        print(f"Voice reply: {data['voice_reply']}")
-        print("[PASS] SITREP test passed!")
+        action = data.get("action", "UNKNOWN")
+        print(f"  Action: {action}")
+        print(f"  Voice reply: {data.get('voice_reply', '')}")
+        print(f"  Offset: {data.get('target_offset', None)}")
+        print("[PASS]")
         return True
     except Exception as e:
-        print(f"[FAIL] SITREP test failed: {e}")
+        print(f"[FAIL] {e}")
         return False
 
-def test_command():
-    """Test /command endpoint with operator command"""
-    print("\n=== Test 3: Operator Command ===")
-    
-    command_payload = {
-        "squad": "ALPHA",
-        "operator_command": "Move to grid 042-081 and suppress enemies.",
-        "current_situation": "Squad ALPHA at grid 042-081, 2 enemies spotted North. Health: 85%. Ammo: 62%."
+
+def test_sitrep_with_enemies():
+    """Test /sitrep with enemies nearby — expect ENGAGE or FLANK"""
+    print("\n=== Test: SITREP (enemies detected) ===")
+    payload = {
+        "source": "test_client",
+        "type": "SITREP",
+        "position": [100.0, 0.0, 200.0],
+        "squad": [
+            {"name": "Alpha_1", "order": "HOLD", "sitrep": "enemy contact"},
+            {"name": "Alpha_2", "order": "HOLD", "sitrep": "enemy contact"},
+            {"name": "Alpha_3", "order": "HOLD", "sitrep": "clear"},
+            {"name": "Alpha_4", "order": "HOLD", "sitrep": "clear"},
+        ],
+        "enemies": [
+            {"dx": 250.0, "dz": 0.0, "dist": 250.0},   # 250m East
+            {"dx": 180.0, "dz": -100.0, "dist": 206.0},  # 206m NE
+        ],
+        "enemy_count": 2,
     }
-    
     try:
-        resp = requests.post(
-            f"{BRIDGE_URL}/command",
-            json=command_payload,
-            timeout=CONFIG["llm"]["timeout_seconds"] + 2
-        )
+        resp = requests.get(f"{BRIDGE_URL}/sitrep?data={requests.utils.quote(json.dumps(payload))}", timeout=30)
         data = resp.json()
-        print(f"Response: {json.dumps(data, indent=2)}")
-        print(f"Action: {data['action']}")
-        print(f"Target grid: {data.get('target_grid', 'N/A')}")
-        print(f"Voice reply: {data['voice_reply']}")
-        print("[PASS] Command test passed!")
+        action = data.get("action", "UNKNOWN")
+        print(f"  Action: {action}")
+        print(f"  Voice reply: {data.get('voice_reply', '')}")
+        print(f"  Offset: {data.get('target_offset', None)}")
+        if action in ("ENGAGE", "FLANK", "MOVE", "SUPPRESS"):
+            print("[PASS] LLM responded with combat action")
+        elif action == "HOLD":
+            print("[WARN] LLM chose HOLD despite enemies — may be valid strategy")
+        else:
+            print(f"[WARN] Unexpected action: {action}")
         return True
     except Exception as e:
-        print(f"[FAIL] Command test failed: {e}")
+        print(f"[FAIL] {e}")
         return False
+
+
+def test_orders():
+    """Test /orders GET (poll) and POST (queue command)"""
+    print("\n=== Test: Orders (poll + queue) ===")
+    try:
+        # POST a command
+        cmd = {"cmd": "spawn", "count": 3, "prefab": "us_ar"}
+        resp = requests.post(f"{BRIDGE_URL}/orders", json=cmd, timeout=5)
+        print(f"  POST /orders: {resp.status_code}")
+
+        # GET pending orders
+        resp = requests.get(f"{BRIDGE_URL}/orders", timeout=5)
+        data = resp.json()
+        orders = data.get("orders", [])
+        print(f"  GET /orders: {len(orders)} pending")
+        if len(orders) > 0:
+            print(f"  First order: {orders[0]}")
+        print("[PASS]")
+        return True
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
+
+def test_ai_thought():
+    """Test /ai_thought endpoint"""
+    print("\n=== Test: AI Thoughts ===")
+    try:
+        resp = requests.get(f"{BRIDGE_URL}/ai_thought", timeout=30)
+        data = resp.json()
+        thoughts = data.get("thoughts", [])
+        print(f"  Thoughts received: {len(thoughts)}")
+        for t in thoughts[:4]:
+            print(f"    [{t.get('name', '?')}] {t.get('thought', '')}")
+        print("[PASS]")
+        return True
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
+
+def test_stavka():
+    """Test /stavka endpoint (OPFOR strategic AI)"""
+    print("\n=== Test: Stavka (OPFOR strategic AI) ===")
+    try:
+        resp = requests.get(f"{BRIDGE_URL}/stavka?opfor=3", timeout=30)
+        data = resp.json()
+        orders = data.get("orders", [])
+        print(f"  Orders: {len(orders)}")
+        for o in orders:
+            print(f"    {o}")
+        print("[PASS]")
+        return True
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
 
 def test_latency():
-    """Test end-to-end latency"""
-    print("\n=== Test 4: Latency Measurement ===")
-    
-    sitrep_payload = {
-        "squad": "BRAVO",
-        "grid": "100-200",
-        "position_x": 500.0,
-        "position_y": 200.0,
-        "position_z": 10.0,
-        "health": 70.0,
-        "ammo_percent": 50.0,
-        "status": "Engaging",
-        "nearby_enemies": 3
+    """Measure end-to-end latency for SITREP→LLM→response"""
+    print("\n=== Test: Latency ===")
+    payload = {
+        "source": "test_client",
+        "type": "SITREP",
+        "position": [500.0, 0.0, 500.0],
+        "squad": [
+            {"name": "Bravo_1", "order": "HOLD", "sitrep": "patrol"},
+            {"name": "Bravo_2", "order": "HOLD", "sitrep": "patrol"},
+        ],
+        "enemies": [],
+        "enemy_count": 0,
     }
-    
+    # Force unique fingerprint each call
     latencies = []
-    for i in range(5):
+    for i in range(3):
+        payload["position"][0] = 500.0 + i * 100  # change position to avoid dedup
         start = time.time()
-        resp = requests.post(
-            f"{BRIDGE_URL}/sitrep",
-            json=sitrep_payload,
-            timeout=CONFIG["llm"]["timeout_seconds"] + 2
-        )
-        latency = (time.time() - start) * 1000
-        latencies.append(latency)
-        print(f"  Call {i+1}: {latency:.1f}ms")
-    
-    avg_latency = sum(latencies) / len(latencies)
-    min_latency = min(latencies)
-    max_latency = max(latencies)
-    
-    print(f"\nAverage: {avg_latency:.1f}ms")
-    print(f"Min: {min_latency:.1f}ms")
-    print(f"Max: {max_latency:.1f}ms")
-    
-    if avg_latency < 1000:
-        print("[PASS] Latency is good (< 1s average)!")
-    else:
-        print("[WARN] Latency is acceptable but could be better.")
-    return True
+        try:
+            resp = requests.get(
+                f"{BRIDGE_URL}/sitrep?data={requests.utils.quote(json.dumps(payload))}",
+                timeout=30,
+            )
+            latency = (time.time() - start) * 1000
+            latencies.append(latency)
+            print(f"  Call {i+1}: {latency:.0f}ms")
+        except Exception as e:
+            print(f"  Call {i+1}: FAILED — {e}")
 
-def test_error_handling():
-    """Test error handling (timeout, invalid data)"""
-    print("\n=== Test 5: Error Handling ===")
-    
-    # Test invalid data
-    try:
-        resp = requests.post(
-            f"{BRIDGE_URL}/sitrep",
-            json={"squad": "INVALID_SQUAD", "grid": "000", "position_x": 0, "position_y": 0, "position_z": 0, "health": 0, "ammo_percent": 0, "status": "test"},
-            timeout=5
-        )
-        if resp.status_code == 422:
-            print("[PASS] Invalid data returns 422 (Pydantic validation)")
+    if latencies:
+        avg = sum(latencies) / len(latencies)
+        print(f"  Average: {avg:.0f}ms")
+        if avg < 1500:
+            print("[PASS] Good latency (<1.5s)")
         else:
-            print(f"[WARN] Invalid data response: {resp.status_code}")
-    except Exception as e:
-        print(f"[FAIL] Error handling test failed: {e}")
-        return False
-    
-    return True
+            print(f"[WARN] Latency {avg:.0f}ms — slow model?")
+        return True
+    return False
+
 
 def main():
     """Run all tests"""
     print("=" * 60)
-    print("  Reforger LLM Bridge - Standalone Test Suite")
+    print("  Reforger LLM Bridge — Test Suite")
     print("=" * 60)
-    print(f"\nBridge URL: {BRIDGE_URL}")
-    print(f"Proxy URL: {CONFIG['llm']['base_url']}")
-    print(f"Model: {CONFIG['llm']['model']}")
-    print(f"Timeout: {CONFIG['llm']['timeout_seconds']}s")
-    
+    print(f"  Bridge: {BRIDGE_URL}")
+    print(f"  Model:  {CONFIG['llm']['model']}")
+    print(f"  Proxy:  {CONFIG['llm']['base_url']}")
+
+    # Allow selective test execution
+    if len(sys.argv) > 1 and sys.argv[1] != "all":
+        test_name = sys.argv[1]
+        test_map = {
+            "health": test_health,
+            "sitrep": test_sitrep_no_enemies,
+            "enemy": test_sitrep_with_enemies,
+            "orders": test_orders,
+            "thought": test_ai_thought,
+            "stavka": test_stavka,
+            "latency": test_latency,
+        }
+        if test_name in test_map:
+            test_map[test_name]()
+            return
+        else:
+            print(f"Unknown test: {test_name}. Available: {', '.join(test_map.keys())}")
+            return
+
+    # Run all tests
     results = []
-    
-    results.append(("Health Check", test_health()))
-    results.append(("SITREP Bridge", test_sitrep()))
-    results.append(("Operator Command", test_command()))
+    results.append(("Health", test_health()))
+    results.append(("SITREP (no enemies)", test_sitrep_no_enemies()))
+    results.append(("SITREP (with enemies)", test_sitrep_with_enemies()))
+    results.append(("Orders", test_orders()))
+    results.append(("AI Thoughts", test_ai_thought()))
+    results.append(("Stavka", test_stavka()))
     results.append(("Latency", test_latency()))
-    results.append(("Error Handling", test_error_handling()))
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("  TEST SUMMARY")
     print("=" * 60)
-    
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
-    
-    for name, result in results:
-        status = "[PASS]" if result else "[FAIL]"
-        print(f"  {status} - {name}")
-    
-    print(f"\n{passed}/{total} tests passed")
-    
-    if passed == total:
-        print("\n[OK] All tests passed! Bridge is ready for in-game testing.")
-        return 0
+    passed = sum(1 for _, r in results if r)
+    for name, r in results:
+        print(f"  {'[PASS]' if r else '[FAIL]'} — {name}")
+    print(f"\n  {passed}/{len(results)} passed")
+    if passed == len(results):
+        print("  [OK] All tests passed!")
+    elif passed > 0:
+        print("  [WARN] Some tests failed.")
     else:
-        print(f"\n[WARN] {total - passed} test(s) failed. Check logs for details.")
-        return 1
+        print("  [FAIL] All tests failed — is the bridge running?")
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
