@@ -353,16 +353,17 @@ Output:"""
                 b_start = line.index("[")
                 b_end = line.index("]", b_start)
                 name = line[b_start+1:b_end].strip()
-                thought = line[b_end+1:].lstrip(":").strip()
+                thought = line[b_end+1:].lstrip(":").strip().strip('"\'')
+                # Clean name: strip "thought" suffix if model included it
+                name = name.replace(" thought", "").strip()
                 if name and thought:
-                    # Strip leading/trailing quotes from thought text
-                    thought = thought.strip('"\'')
-                    if name and thought:
                         thoughts.append({"name": name.strip(" -"), "thought": thought, "mood": "neutral"})
             elif ":" in line:
                 colon_idx = line.index(":")
                 name = line[:colon_idx].strip(" -")
                 thought = line[colon_idx+1:].strip().strip('"\'')
+                # Clean name: strip "thought" suffix
+                name = name.replace(" thought", "").strip()
                 if name and thought and len(name) < 20:
                     thoughts.append({"name": name, "thought": thought, "mood": "neutral"})
         
