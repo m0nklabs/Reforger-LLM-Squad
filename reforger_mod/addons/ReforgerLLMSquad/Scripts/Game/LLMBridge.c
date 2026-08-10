@@ -685,3 +685,4 @@ class LLMBridge
 		if (thoughtCount > 0)
 			Print("[LLMBridge] Processed " + thoughtCount + " AI thoughts");
 	}
+}
