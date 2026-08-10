@@ -104,6 +104,7 @@ Never invent these — every single one has already gone wrong once:
 
 27. **F3.3: Stavka Feedback Loop (2026-08-10)**: OPFOR strength reported to bridge via query param GET /stavka?opfor=N. Bridge includes OPFOR count in fingerprint (count changes trigger new LLM calls). LLM prompt includes current OPFOR strength and adapts strategy: 0=spawn aggressive, 5=HOLD+reinforce from flank, 8=HOLD (adequate). Game casualty detection every 10s via CountAliveOPFOR() - if count drops, triggers immediate poll. Verified: LLM adapts strategy based on OPFOR strength, 0 crashes.
 
+28. **Phase 2: Voice Pipeline (2026-08-11)**: `faster-whisper` + `sounddevice` + `keyboard` packages. VoiceHandler class in `voice_handler.py` — PTT key listener (global hotkey, background thread), audio capture at 16kHz mono, Whisper STT transcription with VAD filter. On PTT release: transcribe -> call_llm() -> queue result in `pending_orders[]` (game picks up via /orders poll). Config: `voice.enabled`, `voice.ptt_key` (F24), `voice.whisper_model` (tiny/small/medium), `voice.whisper_device` (cpu), `voice.whisper_compute_type` (int8). `keyboard` library requires admin on Windows — `start_bridge.bat` auto-elevates via `powershell Start-Process -Verb RunAs`.
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
 
@@ -160,6 +161,7 @@ Never invent these — every single one has already gone wrong once:
 - F3.1 (2026-08-10): Stavka OPFOR Strategic AI - LLM decides OPFOR strategy every 60s. Bridge /stavka endpoint -> StavkaController.c -> spawns USSR Rifleman soldiers. Verified on DS.
 - F3.2 (2026-08-10): OPFOR Waypoint Assignment - soldiers grouped into AI groups, formation Wedge, Move waypoint toward BLUFOR. OPFOR cap (MAX_OPFOR=10) via CountAliveOPFOR(). Zero SCRIPT(E), verified on DS with 2 cycles.
  - F3.3 (2026-08-10): Feedback Loop - OPFOR count sent to bridge (GET ?opfor=N), LLM adapts strategy (spawn when weak, hold when sufficient), casualty detection triggers early polls
+- Phase 2 (2026-08-11): Voice Pipeline (Whisper STT) - voice_handler.py with PTT key listener, faster-whisper transcription, transcription -> LLM -> pending_orders queue. GET /voice endpoint for status. Model: tiny (2.8s load). Auto-elevate admin in start_bridge.bat.
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References
