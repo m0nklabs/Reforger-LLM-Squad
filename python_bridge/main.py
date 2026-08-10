@@ -314,32 +314,73 @@ def generate_ai_thoughts():
     prompt = f"Situation:\n{situation}\n\nSquad members:\n{members_text}\n\nGenerate one thought per member."
 
     try:
+        # Use function calling for reliable structured output
         response = client.chat.completions.create(
             model=CONFIG["llm"]["model"],
             messages=[
                 {"role": "system", "content": AI_THOUGHT_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
             ],
-            response_format={"type": "json_object"},
-            max_tokens=250,
+            tools=[{"type": "function", "function": {
+                "name": "generate_thoughts",
+                "description": "Generate one thought per squad member.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thoughts": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "thought": {"type": "string"},
+                                    "mood": {"type": "string"}
+                                },
+                                "required": ["name", "thought"]
+                            }
+                        }
+                    },
+                    "required": ["thoughts"]
+                }
+            }}],
+            tool_choice={"type": "function", "function": {"name": "generate_thoughts"}},
+            max_tokens=300,
             temperature=0.7
         )
-        content = response.choices[0].message.content if response.choices else ""
-        if content and content.strip():
-            data = json.loads(content)
-            thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
+        
+        # Try function calling result first
+        if response.choices and response.choices[0].message.tool_calls:
+            tc = response.choices[0].message.tool_calls[0]
+            data = json.loads(tc.function.arguments)
+            thoughts = data.get("thoughts", [])
             if not isinstance(thoughts, list):
                 thoughts = []
-            result = {"thoughts": thoughts}
-            app_state["cached_thoughts"] = result
-            app_state["llm_calls"] += 1
-            logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
-            for t in thoughts:
-                name = t.get("name", "?")
-                thought = t.get("thought", "")[:80]
-                mood = t.get("mood", "?")
-                logger.info(f"  [{name} ({mood})] {thought}")
-            return result
+        else:
+            # Fallback: parse content as JSON
+            content = response.choices[0].message.content if response.choices else ""
+            if content and content.strip():
+                data = json.loads(content)
+                thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
+                if not isinstance(thoughts, list):
+                    thoughts = []
+            else:
+                logger.warning("AI thought: LLM returned no tool_calls and empty content")
+                return {"thoughts": []}
+        
+        if not thoughts:
+            logger.warning("AI thought: LLM returned empty thoughts array")
+            return {"thoughts": []}
+        
+        result = {"thoughts": thoughts}
+        app_state["cached_thoughts"] = result
+        app_state["llm_calls"] += 1
+        logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
+        for t in thoughts:
+            name = t.get("name", "?")
+            thought_text = t.get("thought", "")[:80]
+            mood = t.get("mood", "?")
+            logger.info(f"  [{name} ({mood})] {thought_text}")
+        return result
     except Exception as e:
         logger.error(f"AI thought generation failed: {e}")
         app_state["errors"] += 1
@@ -497,6 +538,8 @@ async def receive_waypoint(request: Request):
 async def get_ai_thought():
     result = generate_ai_thoughts()
     return result
+
+async def _get_data(request: Request) -> dict:
     raw = await request.body()
     if raw:
         try: return json.loads(raw)
