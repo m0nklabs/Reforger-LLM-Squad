@@ -144,28 +144,15 @@ class LLMAutoConnect
     //   ServerBrowserMenuUI.JoinProcess_Join()         // actual join
     //
     void ExecuteConnectOrLog()
-    {
-        Print("[LLMAutoConnect] Connect requested for " + m_sServerIp + ":" + m_iServerPort);
+	{
+		Print("[LLMAutoConnect] Connect requested for " + m_sServerIp + ":" + m_iServerPort);
 
-        // Verify BackendApi is reachable (real, verified API)
-        BackendApi api = GetGame().GetBackendApi();
-        if (!api)
-        {
-            Print("[LLMAutoConnect] ERROR: GetBackendApi() returned null");
-            return;
-        }
-
-        Print("[LLMAutoConnect] BackendApi acquired OK");
-
-        // Verify authentication status (real, verified method)
-        string authStr = "false";
-        if (api.IsAuthenticated())
-            authStr = "true";
-
-        Print("[LLMAutoConnect] BackendApi authenticated: " + authStr);
-        Print("[LLMAutoConnect] TODO: implement real connect via ClientLobby/ServerBrowserMenuUI");
-        Print("[LLMAutoConnect] Config will remain disabled until connect is implemented");
-    }
+		// Try to open the server browser menu - our modded OnMenuOpen() will trigger the direct join
+		// ServerBrowserMenuUI.TryOpenServerBrowser() is a verified static method (Doxygen)
+		ServerBrowserMenuUI.TryOpenServerBrowser();
+		Print("[LLMAutoConnect] TryOpenServerBrowser() called - direct join will trigger from OnMenuOpen");
+		Print("[LLMAutoConnect] Auto-connect dispatched to server browser menu system");
+	}
 
     //------------------------------------------------------------------------------------------------
     // Helper: bool to string (avoid fragile bool concat per enforce-script.md skill)
