@@ -99,6 +99,8 @@ Never invent these — every single one has already gone wrong once:
    - Do NOT use `ws="none"` — the websockets library IS installed (v17.0.1), so uvicorn auto-detects it. The monkey-patch handles Reforger's non-WebSocket Upgrade headers.
    - `start_bridge.bat` must use `python main.py` (not `python -m uvicorn main:app`) so all uvicorn parameters (timeout_keep_alive, limit_concurrency) take effect. The monkey-patch works in both modes because it's module-level.
 24. **F2.7: Individual AI Brains (2026-08-10)**: Each AI squad member has a personality (AGGRESSIVE, CAUTIOUS, JOKER, VETERAN, ROOKIE, STEADY). Personalities assigned deterministically by name hash (stable across restarts). Bridge generates one thought per member via single LLM call (plain text prompt, not function calling — 3B models can't handle complex JSON schemas). Thoughts are deduplicated (cached when situation unchanged). Game polls `/ai_thought` every 30s, displays via `SCR_ChatComponent.RadioProtocolMessage()`. Key lesson: llama3.2-3b with `response_format={"type": "json_object"}` returns empty content intermittently. Function calling with nested array schemas returns empty arrays. Plain text prompt + string parsing is the only reliable approach for 3B models.
+25. **F3.1/F3.2: Stavka OPFOR Strategic AI (2026-08-10)**: LLM-driven OPFOR forces. Bridge `/stavka` endpoint generates strategic orders (JSON: `{"orders":[{"action":"spawn_and_move","count":2,"offset":[300,0],"tactic":"flanking"}]}`, uses `response_format={"type":"json_object"}`, temperature=0.5, dedup via fingerprint). Game's `StavkaController.c` polls every 60s, spawns USSR Rifleman (`{DCB41B3746FDD1BE}Prefabs/Characters/OPFOR/USSR_Army/Character_USSR_Rifleman.et`) into AI groups with `AddAgentFromControlledEntity()` + delayed `ActivateAI(500ms)` (rule 21). OPFOR cap: `MAX_OPFOR=10` via `CountAliveOPFOR()` counting agents across tracked groups. Move waypoint: `{750A8D1695BD6998}Prefabs/AI/Waypoints/AIWaypoint_Move.et` at BLUFOR position. Formation Wedge via `AIFormationComponent.SetFormation("Wedge")`. Verified on DS: zero crashes, zero SCRIPT(E), OPFOR spawn + move + formation all functional.
+26. **`ref` arrays with engine classes (2026-08-10)**: In Enforce Script, `ref` (strong reference) is only valid for script-defined classes. Engine classes (like `SCR_AIGroup`, `IEntity`, `AIAgent`) CANNOT use `ref` as element type — compilation error: "Strong ref to 'SCR_AIGroup' class is not allowed". However, the array itself IS a script object and NEEDS `ref` — without it: "Variable is not strong ref (missing 'ref'?)". Correct: `ref array<SCR_AIGroup>`. Wrong: `ref array<ref SCR_AIGroup>` (element ref fails) or `array<SCR_AIGroup>` (missing array ref).
 
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
@@ -151,7 +153,10 @@ Never invent these — every single one has already gone wrong once:
   - `game.mods[]` with GUID `7E5A1C9B3D8F2406` = modId IS the addon GUID (NOT Steam numeric ID)
   - DS downloads mod from BI Workshop → 5637 files → scripts compile + execute
   - `[LLMGameMode] OnGameStart` + `[LLMBridge] Bridge healthy` + SITREP sent on DS!
+
   - RPL:2001, RCON:19999, A2S:17777 all active with mod loaded
+- F3.1 (2026-08-10): Stavka OPFOR Strategic AI - LLM decides OPFOR strategy every 60s. Bridge /stavka endpoint -> StavkaController.c -> spawns USSR Rifleman soldiers. Verified on DS.
+- F3.2 (2026-08-10): OPFOR Waypoint Assignment - soldiers grouped into AI groups, formation Wedge, Move waypoint toward BLUFOR. OPFOR cap (MAX_OPFOR=10) via CountAliveOPFOR(). Zero SCRIPT(E), verified on DS with 2 cycles.
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References

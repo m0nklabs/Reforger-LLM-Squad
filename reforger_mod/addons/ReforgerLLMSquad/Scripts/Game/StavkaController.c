@@ -41,6 +41,10 @@ class StavkaController
 	RestContext m_Rest;
 	ref array<ref StavkaRestCallback> m_aCallbacks;
 
+	// F3.2: Track spawned OPFOR groups for cap enforcement
+	// NOTE: SCR_AIGroup is engine class — no 'ref' on element type, but array itself needs 'ref'
+	ref array<SCR_AIGroup> m_aOPFORGroups;
+
 	float m_fTimer;
 	static const float STAVKA_INTERVAL = 60.0; // 60s between strategic cycles
 
@@ -51,6 +55,7 @@ class StavkaController
 	{
 		m_sBridgeURL = bridgeURL;
 		m_aCallbacks = new array<ref StavkaRestCallback>;
+		m_aOPFORGroups = new array<SCR_AIGroup>;
 		m_fTimer = 0;
 		Print("[Stavka] Controller initialized (bridge=" + bridgeURL + ")");
 	}
@@ -224,6 +229,20 @@ class StavkaController
 		vector spawnPos = bluforPos + offset;
 		spawnPos[1] = bluforPos[1];
 
+		// F3.2: Limit total OPFOR to prevent unbounded spawning
+		int totalOPFOR = CountAliveOPFOR();
+		int MAX_OPFOR = 10;
+		if (totalOPFOR >= MAX_OPFOR)
+		{
+			Print("[Stavka] OPFOR cap reached (" + totalOPFOR + "/" + MAX_OPFOR + "), skipping spawn");
+			return;
+		}
+		if (totalOPFOR + count > MAX_OPFOR)
+		{
+			count = MAX_OPFOR - totalOPFOR;
+			Print("[Stavka] Capping spawn to " + count + " (total cap=" + MAX_OPFOR + ")");
+		}
+
 		Print("[Stavka] Spawning " + count + " OPFOR at offset " + offset + " from BLUFOR (spawn=" + spawnPos + ")");
 
 		// USSR Rifleman — confirmed prefab from SCR_DebugEditorComponent.c
@@ -235,6 +254,54 @@ class StavkaController
 			return;
 		}
 
+		// Look up USSR faction (needed for both group and per-soldier assignment)
+		Faction ussrFaction = null;
+		SCR_FactionManager fm = SCR_FactionManager.Cast(GetGame().GetFactionManager());
+		if (fm)
+			ussrFaction = fm.GetFactionByKey("USSR");
+
+		// Create an AI group for the OPFOR soldiers
+		// Use the slave group prefab from SCR_CommandingManagerComponent
+		SCR_CommandingManagerComponent commandingMgr = SCR_CommandingManagerComponent.GetInstance();
+		ResourceName groupPrefab = "{04D3B38E23F51754}Prefabs/AI/Groups/Slave_Group.et";
+		if (commandingMgr)
+		{
+			ResourceName mgrPrefab = commandingMgr.GetGroupPrefab();
+			if (!mgrPrefab.IsEmpty())
+				groupPrefab = mgrPrefab;
+		}
+
+		Resource groupRes = Resource.Load(groupPrefab);
+		SCR_AIGroup opforGroup = null;
+
+		if (groupRes && groupRes.IsValid())
+		{
+			EntitySpawnParams groupParams = new EntitySpawnParams();
+			groupParams.TransformMode = ETransformMode.WORLD;
+			groupParams.Transform[3] = spawnPos;
+
+			IEntity groupEntity = GetGame().SpawnEntityPrefab(groupRes, GetGame().GetWorld(), groupParams);
+			if (groupEntity)
+			{
+				opforGroup = SCR_AIGroup.Cast(groupEntity);
+				if (opforGroup)
+				{
+					opforGroup.SetDeleteWhenEmpty(false);
+					opforGroup.SetMaxMembers(count + 1);
+					opforGroup.ActivateAI();
+
+					Print("[Stavka] OPFOR group created: " + opforGroup);
+				}
+			}
+		}
+
+		if (!opforGroup)
+		{
+			Print("[Stavka] WARNING: Failed to create group, spawning without group");
+		}
+
+		// Spawn each soldier and add to group
+		array<IEntity> spawnedEntities = {};
 		for (int i = 0; i < count; i++)
 		{
 			vector sp = spawnPos;
@@ -256,23 +323,73 @@ class StavkaController
 			FactionAffiliationComponent facComp = FactionAffiliationComponent.Cast(aiEnt.FindComponent(FactionAffiliationComponent));
 			if (facComp)
 			{
-				SCR_FactionManager fm = SCR_FactionManager.Cast(GetGame().GetFactionManager());
-				if (fm)
-				{
-					Faction ussr = fm.GetFactionByKey("USSR");
-					if (ussr)
-						facComp.SetAffiliatedFaction(ussr);
-				}
+				if (ussrFaction)
+					facComp.SetAffiliatedFaction(ussrFaction);
 			}
 
-			// Activate AI (delayed to prevent combat component crash — AGENTS.md rule 21)
+			// Add to group BEFORE activating AI (AGENTS.md rule 21: prevents combat component crash)
+			if (opforGroup)
+				opforGroup.AddAgentFromControlledEntity(aiEnt);
+
+			// Activate AI after delay (let group components initialize)
 			AIControlComponent aiCtrl = AIControlComponent.Cast(aiEnt.FindComponent(AIControlComponent));
 			if (aiCtrl)
 				GetGame().GetCallqueue().CallLater(aiCtrl.ActivateAI, 500, false);
 
+			spawnedEntities.Insert(aiEnt);
 			Print("[Stavka] OPFOR soldier #" + i + " spawned at " + sp);
 		}
 
-		Print("[Stavka] OPFOR group of " + count + " spawned near " + spawnPos);
+		// Set formation on the OPFOR group
+		if (opforGroup)
+		{
+			AIFormationComponent fc = AIFormationComponent.Cast(opforGroup.FindComponent(AIFormationComponent));
+			if (fc)
+			{
+				fc.SetFormation("Wedge");
+				Print("[Stavka] OPFOR formation: Wedge");
+			}
+
+			// F3.2: Create Move waypoint toward BLUFOR position
+			// This makes OPFOR advance toward the player
+			Resource moveRes = Resource.Load("{750A8D1695BD6998}Prefabs/AI/Waypoints/AIWaypoint_Move.et");
+			if (moveRes && moveRes.IsValid())
+			{
+				EntitySpawnParams wpParams = new EntitySpawnParams();
+				wpParams.TransformMode = ETransformMode.WORLD;
+				wpParams.Transform[3] = bluforPos;
+
+				AIWaypoint moveWP = AIWaypoint.Cast(GetGame().SpawnEntityPrefab(moveRes, GetGame().GetWorld(), wpParams));
+				if (moveWP)
+				{
+					opforGroup.AddWaypoint(moveWP);
+					Print("[Stavka] Move waypoint created at BLUFOR position " + bluforPos);
+				}
+			}
+
+			m_aOPFORGroups.Insert(opforGroup);
+		}
+
+		Print("[Stavka] OPFOR group of " + spawnedEntities.Count() + " spawned with Move waypoint toward BLUFOR");
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// F3.2: Count alive OPFOR soldiers across all spawned groups
+	int CountAliveOPFOR()
+	{
+		int alive = 0;
+		for (int i = m_aOPFORGroups.Count() - 1; i >= 0; i--)
+		{
+			SCR_AIGroup grp = m_aOPFORGroups[i];
+			if (!grp)
+			{
+				m_aOPFORGroups.RemoveOrdered(i);
+				continue;
+			}
+			array<AIAgent> agents = {};
+			grp.GetAgents(agents);
+			alive += agents.Count();
+		}
+		return alive;
 	}
 }
