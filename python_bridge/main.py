@@ -143,9 +143,12 @@ You control a squad of 4 AI soldiers. Issue tactical orders based on the situati
 
 {situation}
 
-When ordering MOVE/FLANK/RETREAT, provide target_offset as RELATIVE meters [dx, dz] from the squad's current position.
-positive dx = east, positive dz = south. Keep offsets small (50-300m). When clear, issue HOLD.
-Respond ONLY with valid JSON matching the function schema."""
+Respond with valid JSON only. Direction guide for target_offset [dx, dz]:
+- East  = positive dx, e.g. [100, 0]
+- West  = negative dx, e.g. [-100, 0]
+- North = negative dz, e.g. [0, -100]
+- South = positive dz, e.g. [0, 100]
+Keep offsets 50-300m. No enemies nearby = HOLD with [0, 0]."""
 
 app_state = {
     "last_sitrep": None,
