@@ -160,6 +160,9 @@ app_state = {
     "sitrep_count": 0,
     "command_count": 0,
     "pending_orders": [],  # F2.x: live orders queue
+    "last_sitrep_fingerprint": None,  # dedup: skip LLM if situation unchanged
+    "last_llm_response": None,       # cached response for unchanged situations
+    "sitrep_skipped": 0,             # count of skipped LLM calls
 }
 
 def get_situation_text(sitrep: SitRepRequest) -> str:
@@ -175,6 +178,18 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
     for m in sitrep.squad:
         lines.append(f"  {m.name}: order={m.order}, sitrep={m.sitrep}")
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
+
+def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
+    """Compute a fingerprint of the tactical situation. If this matches the last one, skip LLM call."""
+    parts = [f"members={len(sitrep.squad)}"]
+    for m in sitrep.squad:
+        parts.append(f"{m.name}:{m.order}:{m.sitrep}")
+    # Round position to 50m grid — tiny movements don't change the tactical picture
+    if sitrep.model_extra:
+        pos = sitrep.model_extra.get("position")
+        if pos and isinstance(pos, list) and len(pos) >= 2:
+            parts.append(f"pos={int(pos[0]//50)*50},{int(pos[2] if len(pos)>2 else pos[1])//50*50}")
+    return "|".join(parts)
 
 def call_llm(command: str, situation: str) -> SitRepResponse:
     app_state["llm_calls"] += 1
@@ -262,6 +277,7 @@ async def health_check():
         "llm_calls": app_state["llm_calls"], "errors": app_state["errors"],
         "sitreps_received": app_state["sitrep_count"], "commands_received": app_state["command_count"],
         "pending_orders": len(app_state["pending_orders"]),
+        "sitreps_skipped_llm": app_state.get("sitrep_skipped", 0),
         "proxy": CONFIG["llm"]["base_url"], "model": CONFIG["llm"]["model"]
     }
 
@@ -304,9 +320,20 @@ async def receive_sitrep(request: Request):
     else:
         sitrep = SitRepRequest(squad=[SitRepMember(name=f"Alpha_{i+1}") for i in range(4)])
     app_state["last_sitrep"] = sitrep
-    logger.info(f"SITREP #{app_state['sitrep_count']}: {len(sitrep.squad)} members")
+
+    # Dedup: skip LLM call if tactical situation hasn't changed
+    fp = _sitrep_fingerprint(sitrep)
+    if fp == app_state["last_sitrep_fingerprint"] and app_state["last_llm_response"]:
+        app_state["sitrep_skipped"] += 1
+        logger.info(f"SITREP #{app_state['sitrep_count']}: {len(sitrep.squad)} members — unchanged, skipping LLM (skipped: {app_state['sitrep_skipped']})")
+        return app_state["last_llm_response"]
+
+    # Situation changed — call LLM
+    app_state["last_sitrep_fingerprint"] = fp
+    logger.info(f"SITREP #{app_state['sitrep_count']}: {len(sitrep.squad)} members — situation changed, calling LLM")
     situation = get_situation_text(sitrep)
     response = call_llm(command=f"SITREP review: {len(sitrep.squad)} squad members deployed.", situation=situation)
+    app_state["last_llm_response"] = response
     logger.info(f"LLM order: action={response.action}, offset={response.target_offset}")
     return response
 
