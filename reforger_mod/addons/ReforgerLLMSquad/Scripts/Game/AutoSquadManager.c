@@ -639,6 +639,54 @@ modded class SCR_PlayerController
 			scrGroup.SetGroupLeader(playerID);
 			Print("[AutoSquad] Player " + playerID + " set as group leader");
 
+			// --- RESPAWN DETECTION: re-link existing slave group if AI still alive ---
+			SCR_AIGroup existingSlave = scrGroup.GetSlave();
+			if (existingSlave)
+			{
+				array<AIAgent> slaveAgents = {};
+				existingSlave.GetAgents(slaveAgents);
+				if (slaveAgents.Count() > 0)
+				{
+					Print("[AutoSquad] RESPAWN: slave group has " + slaveAgents.Count() + " AI agents — re-linking, skipping new spawn");
+
+					// Re-ensure slave AI is active
+					if (!existingSlave.IsAIActivated())
+						existingSlave.ActivateAI();
+
+					// Set formation on slave group
+					AIFormationComponent fc = AIFormationComponent.Cast(existingSlave.FindComponent(AIFormationComponent));
+					if (fc)
+					{
+						fc.SetFormation("Column");
+						Print("[AutoSquad] RESPAWN: formation re-set to Column");
+					}
+
+					// Create fresh Follow waypoint at player's new position
+					Resource followRes = Resource.Load("{A0509D3C4DD4475E}Prefabs/AI/Waypoints/AIWaypoint_Follow.et");
+					if (followRes && followRes.IsValid())
+					{
+						EntitySpawnParams wpParams = new EntitySpawnParams();
+						wpParams.TransformMode = ETransformMode.WORLD;
+						wpParams.Transform[3] = playerEntity.GetOrigin();
+						AIWaypoint followWP = AIWaypoint.Cast(GetGame().SpawnEntityPrefab(followRes, GetGame().GetWorld(), wpParams));
+						if (followWP)
+						{
+							existingSlave.AddWaypoint(followWP);
+							Print("[AutoSquad] RESPAWN: new follow waypoint at player position " + playerEntity.GetOrigin());
+						}
+					}
+
+					// Store group reference for LLMBridge
+					SCR_AIWorld.SetPlayerGroup(scrGroup);
+					Print("[AutoSquad] RESPAWN: squad re-linked successfully, no new AI spawned");
+					return;
+				}
+				else
+				{
+					Print("[AutoSquad] RESPAWN: slave group exists but has 0 agents — will spawn new squad");
+				}
+			}
+
 			// Ensure enough room
 			int currentMax = scrGroup.GetMaxMembers();
 			scrGroup.SetMaxMembers(10);
