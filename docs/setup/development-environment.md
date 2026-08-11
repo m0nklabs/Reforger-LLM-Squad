@@ -34,7 +34,7 @@ Q:\GAMES\Reforger-LLM-Squad\              ← Project root
 │   └── aac_extracted\                   ← AAC mod source (reference, gitignored)
 ├── AGENTS.md                             ← Canonical AI-agent context (source of truth)
 ├── MOD_SETUP.md                          ← Launch diagnosis document
-└── PROJECT_PLAN.md                       ← Architecture & phases
+└── AGENTS.md                       ← Project context, rules & roadmap
 ```
 
 ---

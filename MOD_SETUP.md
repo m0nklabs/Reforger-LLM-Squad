@@ -134,7 +134,7 @@ Move-Item 'C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\*' '..
 ```
 Our mod loaded via `-addonsDir` is separate and unaffected.
 
-## Next step (F1.2 from PROJECT_PLAN)
+## Next step
 
 `LLMBridge` is not instantiated anywhere yet -> NO `[LLMBridge]` lines appear in-game.
 Wiring: `modded class SCR_BaseGameMode` that creates an `LLMBridge` on OnGameStart,

@@ -23,7 +23,7 @@ These mistakes already cost a full debug session (2026-08-07). Do not repeat the
 2. **ALWAYS start the game with working directory = game dir.** Otherwise the engine cannot find `./addons` → `Can't find '58D0FB3206B6F859' game addon!` (= the BASE GAME is missing, NOT your mod) → Engine Initialization Error. `launch_reforger.bat` does this correctly (`start /d`).
 3. **GUID `58D0FB3206B6F859` = the base game** (`addons\data\ArmaReforger.gproj`). Our mod GUID = `7E5A1C9B3D8F2406`. Never swap or reuse them (the pre-commit hook guards this).
 
-⚠️ If older docs contradict this file, THIS file wins (together with `MOD_SETUP.md`). `PROJECT_PLAN.md` was corrected but remains a planning doc.
+⚠️ If older docs contradict this file, THIS file wins (together with `MOD_SETUP.md`).
 
 ## Mandatory workflow — do this, don't improvise
 
@@ -206,11 +206,11 @@ Never invent these — every single one has already gone wrong once:
 - F4 (2026-08-11): Vehicle mount/dismount commands. MOUNT/DISMOUNT in LLM enum, AutoSquadManager.MountNearestVehicle() + DismountVehicle(). Also fixed Stavka offset bug: BLUFOR position now found via SCR_AIWorld.GetBLUFORPosition() (was returning <0,0,0>), LLM prompt stripped of absolute coords (was returning absolute coords as offset), offset clamped to 500m max.
 - F5 (2026-08-11): Battle Memory — bridge maintains rolling battle_log (15 events), included in LLM prompt. LLM now remembers previous orders, enemy contacts, and critical events. Verified on DS: battle_log populated, leader_state in fingerprint.
 - F6 (2026-08-11): Medic Rescue — leader_state (alive/downed/dead) in SITREP JSON + fingerprint. MEDIC action in LLM enum: squad runs to downed leader with Follow waypoint. Downed detection TODO (rule 37: ChimeraCharacterController not available as script type). Framework ready for when correct API is found.
-- Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
+- Launch diagnosis: `MOD_SETUP.md`.
 
 ## References
 - `MOD_SETUP.md` — verified fix + full diagnosis of the launch errors
-- `PROJECT_PLAN.md` — architecture & phases (corrected 2026-08-07; AGENTS.md wins when in doubt)
+
 - BI wiki: `Arma_Reforger:Startup_Parameters`, `:Mod_Project_Setup`, `:REST_API_Usage` (community.bistudio.com)
 - SampleMods reference: `docs/` (GITIGNORED — fetch yourself: github.com/BohemiaInteractive/Arma-Reforger-Samples)
 

@@ -165,7 +165,7 @@ python test_client.py tts      # Just TTS check
 
 - **AGENTS.md** — Canonical AI-agent context (source of truth, read first)
 - **MOD_SETUP.md** — Launch error diagnosis + verified fix
-- **PROJECT_PLAN.md** — Architecture & phased plan
+- **AGENTS.md** — Canonical project context, rules & roadmap (source of truth)
 - **docs/dedicated-server-setup.md** — DS configuration details
 - **docs/skills/** — Enforce Script, modding, debugging lessons
 
