@@ -20,7 +20,7 @@ These mistakes already cost a full debug session (2026-08-07). Do not repeat the
    - **NEVER** delete the Workshop cache directory itself — only remove `.pak` and `.rdb` files from it.
 
 1. **`-mod=` does NOT exist in Arma Reforger** (that is Arma 3/DayZ). The engine ignores it WITHOUT warning. Correct: `-addonsDir <path> -addons <GUID>`.
-2. **ALWAYS start the game with working directory = game dir.** Otherwise the engine cannot find `./addons` → `Can't find '58D0FB3206B6F859' game addon!` (= the BASE GAME is missing, NOT your mod) → Engine Initialization Error. `launch_reforger.bat` does this correctly (`start /d`).
+2. **ALWAYS start the DS with working directory = game dir.** Otherwise the engine cannot find `./addons` → `Can't find '58D0FB3206B6F859' game addon!` (= the BASE GAME is missing, NOT your mod) → Engine Initialization Error. `launch_ds.bat` does this correctly.
 3. **GUID `58D0FB3206B6F859` = the base game** (`addons\data\ArmaReforger.gproj`). Our mod GUID = `7E5A1C9B3D8F2406`. Never swap or reuse them (the pre-commit hook guards this).
 
 ⚠️ If older docs contradict this file, THIS file wins (together with `MOD_SETUP.md`).
@@ -40,8 +40,6 @@ These mistakes already cost a full debug session (2026-08-07). Do not repeat the
 
 NEVER: invent your own launch commands · reuse GUIDs · `git add -f` on gitignored files · commit `config.json` · claim "fixed" without log evidence.
 
-**Listen server (game client with `-addonsDir`)** is still available for quick script-only changes (no workshop publish needed): `launch_reforger.bat`.
-But for all MP/RPL features (AI spawn, group networking, commanding), use the DS workflow.
 
 ## What this project is
 LLM-driven squad control for Arma Reforger. An Enforce-script mod in the game talks over
@@ -54,7 +52,7 @@ on the LAN). Phase 1 = REST + squad control (no voice yet).
 - **LLM**: Ollama-compatible proxy `http://192.168.1.35:11434/v1`, model `llama3`
 - **Platform**: Windows-only paths. Game dir: `Q:\SteamLibrary\steamapps\common\Arma Reforger`
 - **Logs**: `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\logs_<timestamp>\console.log`
-- **Launchers**: `start_bridge.bat` (bridge, port 5001), `launch_reforger.bat` (game + mod)
+- **Launchers**: `start_bridge.bat` (bridge, port 5001), `launch_ds.bat` (dedicated server)
 
 ## Does NOT exist in Reforger/Enforce (anti-hallucination list)
 Never invent these — every single one has already gone wrong once:
@@ -65,12 +63,12 @@ Never invent these — every single one has already gone wrong once:
 - Addon metadata: `addon.json`, `gproj.conf` → correct: `addon.gproj`
 
 ## Critical rules (misc, hard-won)
-1. **Testing is empirical, always**: kill → `launch_reforger.bat` → ~50s → `check_latest_log.ps1`. Crash signature: log ≈1145 bytes. `SCRIPT (E)` in base-game `.c` files AFTER your file = cascade noise; fix YOUR first error first.
+1. **Testing is empirical, always**: kill → `launch_ds.bat`= → ~55s → `check_latest_log.ps1`. Crash signature: log ≈1145 bytes. `SCRIPT (E)` in base-game `.c` files AFTER your file = cascade noise; fix YOUR first error first.
 2. **Route sync**: endpoints in `LLMBridge.c` must match `main.py` — all 5 routes synced (F1.3 done). Game sends via GET `?data=<json>` (POST body doesn't transmit in Enforce). Endpoints: `/health`, `/sitrep`, `/command`, `/status`, `/waypoint`.
 3. **Port sync**: bridge runs on **5001** (config.json, bats, LLMBridge default URL).
 4. **Never commit secrets.** `config.json` (API key) is gitignored + pre-commit blocked; only commit `config.example.json`. Docs must never contain the API key.
 5. Never change the GUID in `addon.gproj` (pre-commit hook blocks this).
-6. **Dedicated server vs listen server (2026-08-09, BREAKTHROUGH)**: The DS (`ArmaReforgerServer.exe`) CAN load mods published to the BI Workshop. **Final working solution:**
+6. **Dedicated Server (DS) — primary and only dev workflow**: The DS (`ArmaReforgerServer.exe`) loads mods published to the BI Workshop. **Working solution:**
    - **`game.mods[]` with the addon GUID** = the `modId` IS the 16-char hex GUID from `addon.gproj` (NOT a Steam numeric ID). Reforger uses BI's own Workshop, not Steam's `publishedfileid`.
    - **DS workflow**: starts vanilla (5633 files) → downloads mod from BI Workshop → reloads with mod (5637 files) → scripts compile + execute → server listens (RPL:2001, RCON:19999).
    - **Prerequisite**: mod MUST be published to BI Workshop (even as unlisted) via Workbench. Before publishing, `game.mods[]` fails with "Addon was not found on workshop".
@@ -80,8 +78,8 @@ Never invent these — every single one has already gone wrong once:
    - **Correct scenarioId**: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf` (found via game client log: `PlayGameConfig`)
    - DS ports: RPL=2001, RCON=19999, A2S=17777. Full docs: `docs/dedicated-server-setup.md`.
    - **Workbench publishing**: `ArmaReforgerWorkbenchSteamDiag.exe` in `Q:\SteamLibrary\steamapps\common\Arma Reforger Tools\Workbench\`. Output: `.pak` + `resourceDatabase.rdb` + `manifest.json` in `%LOCALAPPDATA%\Temp\Arma Reforger Workbench\Publishing\<GUID>\`.
-7. **Play (offline) vs Host (multiplayer) — CRITICAL (2026-08-09)**: When you click **Host** in the scenario menu, the game DESTROYS the first instance and creates a NEW one — WITHOUT loading local mods (5633 = vanilla). When you click **Play** (offline/single-player), the game stays in the SAME instance (5637 = mod loaded). **For mod testing, ALWAYS use Play, not Host.** The modded classes only execute in the Play (offline) path.
-8. **Packed vs unpacked mods (2026-08-09)**: Unpacked mods (loose `.c` files + `addon.gproj`) work correctly for script execution. Packed `.pak` files are recognized (`(packed)` in log) but **do not load modded classes at runtime** — the scripts compile but `Print()` output never appears. Use unpacked for development; packed only for workshop publishing.
+
+
 9. **Cached workshop mods (2026-08-09)**: If the user previously joined a community server, 100+ workshop mods may be cached in `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\`. These cause `ADDON_LOAD_ERROR` when starting a scenario. Fix: move them to `addons_disabled/` subfolder. Our mod in `-addonsDir` is separate and unaffected.
 10. **`SCR_AIGroup.IsFull()` does NOT exist** (2026-08-09). Use `GetPlayerAndAgentCount()` vs `GetMaxMembers()` instead. Verified via Doxygen member list.
 11. **REST callback GC (2026-08-09)**: Inline `new RestCallback(...)` passed to `GET()`/`POST()` is garbage-collected before the async HTTP response arrives. Callbacks NEVER fire. Fix: store in `ref array<ref MyCallback> m_aActiveCallbacks` to keep alive. Both `SetOnSuccess` (modern) and `OnSuccess` (deprecated override) fire correctly once the callback survives GC.
@@ -124,7 +122,7 @@ Never invent these — every single one has already gone wrong once:
 29. **ChimeraWorld uses CastFrom(), NOT Cast() (2026-08-11, F3.5)**: `ChimeraWorld.Cast()` produces "Cast not supported on type 'ChimeraWorld'". The correct API is `ChimeraWorld.CastFrom(GetGame().GetWorld())` (verified via Doxygen). `ChimeraWorld` has a static `CastFrom(BaseWorld world)` method, NOT the inherited `.Cast()` pattern used by `SCR_AIGroup.Cast()` etc. This is because `ChimeraWorld` is a sealed/engine class. Once you have `ChimeraWorld`, use `world.GetTimeAndWeatherManager()` to access `TimeAndWeatherManagerEntity` for time, weather, day/night.
 
 30. **Enforce Script += does not auto-convert int to string (2026-08-11, F3.5)**: `string str = "" + int;` works (auto-conversion in `+`), but `str += int;` fails with "Incompatible parameter". Fix: `str += "" + int;`. The `+=` operator only accepts string parameters, while `+` auto-converts primitives to string. Also, `int.ToString()` is NOT a valid method call (produces "Broken expression"). Always use direct string concatenation: `"" + value` instead of `value.ToString()`.
-31. **DS is now primary dev workflow (2026-08-11)**: The dedicated server (`ArmaReforgerServer.exe`) with `-config server.json` + `game.mods[]` is the PRIMARY development workflow. The DS downloads the mod from BI Workshop, compiles scripts, and hosts the game. The game client connects via Multiplayer -> Direct Connect -> `127.0.0.1:2001`. DS logs go to the same path as game client logs: `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\`. The `check_latest_log.ps1` script works for both. Key difference: the DS loads MainMenuWorld first, then auto-loads the scenario from `server.json`'s `scenarioId`. Scripts execute after the scenario loads (~10s after start).
+31. **DS is the dev workflow (2026-08-11)**: The dedicated server (`ArmaReforgerServer.exe`) with `-config server.json` + `game.mods[]`. The DS downloads the mod from BI Workshop, compiles scripts, and hosts the game. The game client connects via Multiplayer -> Direct Connect -> `127.0.0.1:2001`. DS logs go to the same path as game client logs: `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\`. The `check_latest_log.ps1` script works for both. Key difference: the DS loads MainMenuWorld first, then auto-loads the scenario from `server.json`'s `scenarioId`. Scripts execute after the scenario loads (~10s after start).
 
 32. **RPL authority required for entity spawning on DS (2026-08-11, INVESTIGATING)**: On the DS, `SpawnEntityPrefab()` and `SpawnEntityPrefabEx()` calls from StavkaController fail with `NETWORK (E): Attempt to spawn a replicated prefab ... blocked. Allowed server-side only!`. This happens even though the DS IS the server. The DS connects to BI's backend as an RPL "client" for lobby services, which may cause the game logic to run in a non-authoritative context. The StavkaController and AutoSquadManager entity spawning code needs an RPL authority guard. LLMBridge (REST calls) and SITREPs work fine on DS without authority. The offset fix confirmed: LLM now returns relative offsets `[0,0]` instead of absolute coords, and `SCR_AIWorld.GetBLUFORPosition()` correctly finds player position on DS.
 
@@ -168,12 +166,8 @@ Never invent these — every single one has already gone wrong once:
 ## Status & roadmap
 - ✅ F0/F1.1: mod loads in game, scripts compile, game reaches main menu (verified via console.log)
 - ✅ F1.2a: AutoSquadManager.c compiles, modded classes work in-game (AddedAIAgent, OnControlledEntityChanged)
-- ✅ Dev workflow resolved: listen server (game client) loads local mods without workshop publishing
-  - Dedicated server CANNOT: `-config` + `-addons` are mutually exclusive; `-addons` alone hangs on backend; `game.mods[]` triggers workshop validation
-  - Game client: `-addonsDir <path> -addons <GUID>` → mod loads, scripts execute, no backend crash
-  - **Use Play (offline), NOT Host (multiplayer)** — Host destroys the instance and reloads vanilla (5633 files)
-  - **Use unpacked mods** — packed .pak files compile but modded classes don't execute at runtime
-- ✅ F1.2b: end-to-end test PASSED — player spawns, AutoSquad finds group, sets player as leader, calls SetNumberOfMembersToSpawn(5) + SpawnUnits(). All verified via console.log (2026-08-09 13:17):
+
+- ✅ F1.2b: end-to-end test PASSED — player spawns, AutoSquad finds group, sets player as leader, spawns squad. All verified via console.log (2026-08-09):
   ```
   [AutoSquad] Player 1 entity changed, scheduling squad spawn (5s delay)
   [AutoSquad] Player faction: US
@@ -196,13 +190,7 @@ Never invent these — every single one has already gone wrong once:
   - `AIFormationComponent.SetFormation("Column")` for squad movement
   - Live orders: spawn, hold, move, status, despawn, formation, follow
   - LLM: qwen3.6-35b-uncensored (switched from llama3)
-- ✅ DS investigation (2026-08-09 21:30):
-  - DS installed: `Q:\SteamLibrary\steamapps\common\Arma Reforger Server\`
-  - Correct scenarioId: `{ECC61978EDCC2B5A}Missions/23_Campaign.conf`
-  - Vanilla DS starts: RPL:2001, RCON:19999, A2S:17777
-  - `-config` + `-addons` CANNOT be combined (hard DS check)
-  - Mod compiles on DS (5637 files) but needs `.pak` or workshop for loading
-  - Full docs: `docs/dedicated-server-setup.md`
+
 - ✅ **DS WITH MOD WORKING (2026-08-09 21:28)**:
   - Mod published to BI Workshop via Workbench (unlisted)
   - `game.mods[]` with GUID `7E5A1C9B3D8F2406` = modId IS the addon GUID (NOT Steam numeric ID)
