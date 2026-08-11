@@ -221,6 +221,22 @@ Never invent these — every single one has already gone wrong once:
 - F5 (2026-08-11): Battle Memory — bridge maintains rolling battle_log (15 events), included in LLM prompt. LLM now remembers previous orders, enemy contacts, and critical events. Verified on DS: battle_log populated, leader_state in fingerprint.
 - F6 (2026-08-11): Medic Rescue — leader_state (alive/downed/dead) in SITREP JSON + fingerprint. MEDIC action in LLM enum: squad runs to downed leader with Follow waypoint. Downed detection TODO (rule 37: ChimeraCharacterController not available as script type). Framework ready for when correct API is found.
 - **F7 (2026-08-11, ROADMAP): Individual AI Soldier Memory** — Each AI soldier gets personal memory file (`ai_soldiers/{name}.json`) with: name, personality, birth_date, personal event log, opinions, mood, relationships, alive/dead status. NOT shared memory. Events logged per-soldier (contact, casualties, order changes). Thoughts generated from personal history. Death = retain file 7 days for debugging, then archive to `graveyard/`. Makes soldiers feel like real people who remember their experiences.
+- **F8 (2026-08-11, VISION/ROADMAP): AI Soldiers as Autonomous Agents** — Evolution of F7. Each AI soldier is not just a "thought generator" but an autonomous LLM agent with:
+  - **Identity System Prompt**: Each soldier gets a dedicated system prompt establishing their identity:
+    - Name, faction (US/USSR), rank (PFC, Sergeant, etc.), role (Rifleman, AR, Medic)
+    - Chain of command: who is their CO (the player), who are their squadmates
+    - Expectations: what is expected of them in their role and current mission
+  - **Backstory**: Personal history used in the system prompt (age, origin, time in theater, prior deployments, personality traits). Could come from game data or generated at spawn. Makes each soldier unique — a rookie fresh from training sounds different from a veteran on their third deployment.
+  - **Available Tools**: The soldier LLM can call tools to interact with the game world, not just generate text:
+    - `report_contact(direction, distance, count)` — report enemy sighting to squad
+    - `report_clear()` — report area is clear
+    - `request_orders()` — ask CO for new orders
+    - `report_status(health, ammo)` — report own condition
+    - `call_medic(target)` — request medical help for a squadmate
+    - `suggest_tactic(formation, direction)` — suggest a tactical change
+  - **Agent, not commentator**: The soldier observes → decides → acts. Thoughts are just one output; tool calls are the other. A soldier who spots an enemy doesn't just think "I see someone" — they call `report_contact()` which triggers game logic.
+  - **Per-soldier conversation history**: Each soldier maintains their own LLM conversation history (messages array), not just a flat event log. This allows the LLM to reference prior context naturally.
+  - **Game backstory integration**: Arma Reforger may provide backstory/lore for spawned character entities. If available, this should be used in the soldier's system prompt to give them depth.
 - **Eureka Workflow (2026-08-11, MANDATORY)**: At every breakthrough/fix/discovery: update AGENTS.md → sync docs → commit → push to GitHub. Knowledge is never lost.
 - **Event-driven thoughts (2026-08-11)**: Replaced 30s thought timer with event detection. Thoughts trigger on: contact (enemy detected), clear (enemies eliminated), order_change (LLM order changed), casualty (squad member lost), idle (60s fallback). 15s cooldown between thought polls. Event context added to LLM prompt so thoughts are reactive, not scheduled.
 - **Dynamic faction (2026-08-11)**: Squad soldier prefab + OPFOR faction now dynamic based on player faction. US player → US squad + USSR OPFOR. USSR player → USSR squad + US OPFOR. Faction set via FactionManager.GetPlayerFaction() per-soldier.
