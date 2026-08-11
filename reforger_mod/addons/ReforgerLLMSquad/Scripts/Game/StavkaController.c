@@ -241,23 +241,37 @@ class StavkaController
 	//------------------------------------------------------------------------------------------------
 	void SpawnOPFORGroup(int count, vector offset)
 	{
-		// Get BLUFOR position (player group)
-		SCR_AIGroup bluforGroup = SCR_AIWorld.GetPlayerGroup();
-		vector bluforPos = "0 0 0";
-		if (bluforGroup)
-			bluforPos = bluforGroup.GetOrigin();
-		else
+		// RPL authority: entity spawning only allowed server-side
+		if (!Replication.IsServer())
 		{
-			PlayerManager pm = GetGame().GetPlayerManager();
-			if (pm)
-			{
-				IEntity p = pm.GetPlayerControlledEntity(1);
-				if (p) bluforPos = p.GetOrigin();
-			}
+			Print("[Stavka] SpawnOPFORGroup: skipped (not server authority)");
+			return;
+		}
+
+		// Get BLUFOR position via robust lookup (same as LLMBridge)
+		vector bluforPos = SCR_AIWorld.GetBLUFORPosition();
+
+		if (bluforPos == "0 0 0")
+		{
+			Print("[Stavka] WARNING: BLUFOR position unknown, cannot spawn OPFOR");
+			return;
+		}
+
+		// Safety: clamp offset to reasonable range (LLM sometimes returns absolute coords)
+		float maxOffset = 500.0;
+		if (Math.AbsFloat(offset[0]) > maxOffset || Math.AbsFloat(offset[2]) > maxOffset)
+		{
+			Print("[Stavka] WARNING: offset " + offset + " exceeds " + maxOffset + "m, likely absolute coords - clamping");
+			if (offset[0] > maxOffset) offset[0] = maxOffset;
+			if (offset[0] < -maxOffset) offset[0] = -maxOffset;
+			if (offset[2] > maxOffset) offset[2] = maxOffset;
+			if (offset[2] < -maxOffset) offset[2] = -maxOffset;
 		}
 
 		vector spawnPos = bluforPos + offset;
 		spawnPos[1] = bluforPos[1];
+
+		Print("[Stavka] BLUFOR at " + bluforPos + ", offset " + offset + ", spawn at " + spawnPos);
 
 		// F3.2: Limit total OPFOR to prevent unbounded spawning
 		int totalOPFOR = CountAliveOPFOR();
@@ -272,8 +286,6 @@ class StavkaController
 			count = MAX_OPFOR - totalOPFOR;
 			Print("[Stavka] Capping spawn to " + count + " (total cap=" + MAX_OPFOR + ")");
 		}
-
-		Print("[Stavka] Spawning " + count + " OPFOR at offset " + offset + " from BLUFOR (spawn=" + spawnPos + ")");
 
 		// USSR Rifleman — confirmed prefab from SCR_DebugEditorComponent.c
 		ResourceName prefabPath = "{DCB41B3746FDD1BE}Prefabs/Characters/OPFOR/USSR_Army/Character_USSR_Rifleman.et";

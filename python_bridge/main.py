@@ -678,7 +678,31 @@ def generate_stavka_orders(opfor_count: int = -1):
     app_state["stavka_cycles"] += 1
     app_state["llm_calls"] += 1
 
-    situation = get_situation_text(sitrep)
+    # Build Stavka-specific situation text WITHOUT absolute coordinates
+    # (LLM was returning absolute coords as "offset" instead of relative [dx, dz])
+    situation_lines = []
+    for m in sitrep.squad:
+        situation_lines.append(f"  {m.name}: order={m.order}, sitrep={m.sitrep}")
+    if sitrep.enemy_count > 0 and sitrep.enemies:
+        situation_lines.append(f"ENEMY CONTACT: {sitrep.enemy_count} hostiles detected")
+        for e in sitrep.enemies[:5]:
+            dist = e.get("dist", 0)
+            compass = "unknown"
+            dx = e.get("dx", 0)
+            dz = e.get("dz", 0)
+            if dist > 0:
+                angle = math.degrees(math.atan2(-dz, dx))
+                if angle < 0: angle += 360
+                dirs = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
+                idx = int((angle + 22.5) / 45) % 8
+                compass = dirs[idx]
+            situation_lines.append(f"  Enemy {dist:.0f}m {compass}")
+    else:
+        situation_lines.append("No enemy contacts reported.")
+    if sitrep.environment:
+        situation_lines.append(f"Environment: {sitrep.environment}")
+    situation = "\n".join(situation_lines)
+
     opfor_info = f"Current OPFOR strength: {opfor_count} soldiers alive" if opfor_count >= 0 else "OPFOR strength unknown"
     prompt = f"BLUFOR situation:\n{situation}\n{opfor_info}\n\nIssue OPFOR strategic orders. Reinforce if losses are high. Return JSON only."
 

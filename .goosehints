@@ -18,14 +18,18 @@ These mistakes already cost a full debug session (2026-08-07). Do not repeat the
 
 | Task | Exact action |
 |---|---|
-| Start game with mod | `taskkill /F /IM ArmaReforgerSteam.exe` → `launch_reforger.bat` (listen server: no backend, no workshop needed) |
-| Start DS (production only) | Only with published workshop mod (`-config server.json` + `game.mods[]`). DS CANNOT load local mods. |
-| Verify result | ~50s after start: `powershell -NoProfile -File scripts\check_latest_log.ps1` |
+| Start bridge | `start_bridge.bat` (port 5001, auto-elevates admin for voice PTT key) |
+| Start DS with mod | `taskkill /F /IM ArmaReforgerServer.exe` → `launch_ds.bat` (uses `server.json` + `game.mods[]`, mod from BI Workshop) |
+| Connect game client | Launch Reforger normally → Multiplayer → Direct Connect → `127.0.0.1:2001` |
+| Verify result | ~50s after DS start: `powershell -NoProfile -File scripts\check_latest_log.ps1` (checks newest console.log) |
 | Claiming "done" | ONLY if that script reports `OK` |
 | Writing game scripts | FIRST read `@docs/skills/enforce-script.md`; only use patterns from it |
 | Editing AGENTS.md | run `scripts\sync-agent-docs.bat` before committing |
 
 NEVER: invent your own launch commands · reuse GUIDs · `git add -f` on gitignored files · commit `config.json` · claim "fixed" without log evidence.
+
+**Listen server (game client with `-addonsDir`)** is still available for quick script-only changes (no workshop publish needed): `launch_reforger.bat`.
+But for all MP/RPL features (AI spawn, group networking, commanding), use the DS workflow.
 
 ## What this project is
 LLM-driven squad control for Arma Reforger. An Enforce-script mod in the game talks over
@@ -108,6 +112,22 @@ Never invent these — every single one has already gone wrong once:
 29. **ChimeraWorld uses CastFrom(), NOT Cast() (2026-08-11, F3.5)**: `ChimeraWorld.Cast()` produces "Cast not supported on type 'ChimeraWorld'". The correct API is `ChimeraWorld.CastFrom(GetGame().GetWorld())` (verified via Doxygen). `ChimeraWorld` has a static `CastFrom(BaseWorld world)` method, NOT the inherited `.Cast()` pattern used by `SCR_AIGroup.Cast()` etc. This is because `ChimeraWorld` is a sealed/engine class. Once you have `ChimeraWorld`, use `world.GetTimeAndWeatherManager()` to access `TimeAndWeatherManagerEntity` for time, weather, day/night.
 
 30. **Enforce Script += does not auto-convert int to string (2026-08-11, F3.5)**: `string str = "" + int;` works (auto-conversion in `+`), but `str += int;` fails with "Incompatible parameter". Fix: `str += "" + int;`. The `+=` operator only accepts string parameters, while `+` auto-converts primitives to string. Also, `int.ToString()` is NOT a valid method call (produces "Broken expression"). Always use direct string concatenation: `"" + value` instead of `value.ToString()`.
+31. **DS is now primary dev workflow (2026-08-11)**: The dedicated server (`ArmaReforgerServer.exe`) with `-config server.json` + `game.mods[]` is the PRIMARY development workflow. The DS downloads the mod from BI Workshop, compiles scripts, and hosts the game. The game client connects via Multiplayer -> Direct Connect -> `127.0.0.1:2001`. DS logs go to the same path as game client logs: `C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\logs\`. The `check_latest_log.ps1` script works for both. Key difference: the DS loads MainMenuWorld first, then auto-loads the scenario from `server.json`'s `scenarioId`. Scripts execute after the scenario loads (~10s after start).
+
+32. **RPL authority required for entity spawning on DS (2026-08-11, INVESTIGATING)**: On the DS, `SpawnEntityPrefab()` and `SpawnEntityPrefabEx()` calls from StavkaController fail with `NETWORK (E): Attempt to spawn a replicated prefab ... blocked. Allowed server-side only!`. This happens even though the DS IS the server. The DS connects to BI's backend as an RPL "client" for lobby services, which may cause the game logic to run in a non-authoritative context. The StavkaController and AutoSquadManager entity spawning code needs an RPL authority guard. LLMBridge (REST calls) and SITREPs work fine on DS without authority. The offset fix confirmed: LLM now returns relative offsets `[0,0]` instead of absolute coords, and `SCR_AIWorld.GetBLUFORPosition()` correctly finds player position on DS.
+
+31. **DS is primary dev workflow (2026-08-11)**: Dedicated server with -config server.json + game.mods[]. Game client connects via Direct Connect 127.0.0.1:2001. DS logs to same path as game client logs.
+
+32. **RPL authority for entity spawning on DS (2026-08-11)**: SpawnEntityPrefab on DS may fail with NETWORK (E) blocked. Always check Replication.IsServer() before spawning. LLMBridge REST calls work fine without authority.
+
+33. **Workshop cache overrides DS local addons (2026-08-11, CRITICAL)**: DS downloads mod from BI Workshop and caches it in Documents/My Games/ArmaReforger/addons/ReforgerLLMSquadControl_7E5A1C9B3D8F2406/. This OVERRIDES the DS local addons dir. You MUST sync .c files to BOTH locations or DS compiles old code. #1 cause of phantom compile errors.
+
+34. **AutoSquad retry + dynamic group lookup (2026-08-11)**: On DS, players spawn BEFORE joining a group. AutoSquad fires 5s after spawn, finds no group. Fix: retry every 10s for 3min + LLMBridge.FindPlayerGroup() dynamically looks up group each SITREP via SCR_PlayerControllerGroupComponent.GetPlayersGroup().
+
+35. **QueryEntitiesBySphere needs callback function (2026-08-11, F4)**: QueryEntitiesBySphere(pos, radius, array) does NOT work. It expects a callback function. Right: define module-level bool QueryEntityCallback(IEntity ent) and call QueryEntitiesBySphere(pos, 60, QueryEntityCallback).
+
+36. **EGetOutType enum not publicly documented (2026-08-11, F4)**: EGetOutType.ALL, .GETOUT, .NORMAL all fail. Workaround: use AskOwnerToGetOutFromVehicle() instead of GetOutVehicle(). Vanilla commanding system (radial menu) handles vehicle control natively.
+
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
 
@@ -167,6 +187,8 @@ Never invent these — every single one has already gone wrong once:
 - Phase 2 (2026-08-11): Voice Pipeline (Whisper STT) - voice_handler.py with PTT key listener, faster-whisper transcription, transcription -> LLM -> pending_orders queue. GET /voice endpoint for status. Model: tiny (2.8s load). Auto-elevate admin in start_bridge.bat.
 - F3.5 (2026-08-11): Environment Scanning - ScanEnvironment() in LLMBridge.c reports time/day/night + terrain elevation. Uses ChimeraWorld.CastFrom(), TimeAndWeatherManagerEntity (GetTime, IsSunSet). Bridge receives 'environment' field in SITREP, includes in LLM prompt, adds to fingerprint (time changes trigger new calls). 8/8 tests pass.
 - Phase 3 (2026-08-11): TTS Squad Feedback - edge-tts (primary, 10 voices) + pyttsx3 (offline fallback). tts_handler.py with TTSHandler class. Bridge speaks voice_reply from SITREP/command/voice endpoints via background thread. /tts endpoint for status. Rate-limited (2s min interval), dedup (no repeat). 9/9 tests pass.
+- F4 (2026-08-11): Vehicle mount/dismount commands. MOUNT/DISMOUNT in LLM enum, AutoSquadManager.MountNearestVehicle() + DismountVehicle(). Vanilla radial menu also works natively.
+- F4 (2026-08-11): Vehicle mount/dismount commands. MOUNT/DISMOUNT in LLM enum, AutoSquadManager.MountNearestVehicle() + DismountVehicle(). Also fixed Stavka offset bug: BLUFOR position now found via SCR_AIWorld.GetBLUFORPosition() (was returning <0,0,0>), LLM prompt stripped of absolute coords (was returning absolute coords as offset), offset clamped to 500m max.
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References

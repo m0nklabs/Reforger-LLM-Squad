@@ -58,6 +58,32 @@ modded class SCR_AIWorld
 	}
 
 	//------------------------------------------------------------------------------------------------
+	static vector GetBLUFORPosition()
+	{
+		// Method 1: stored player group
+		SCR_AIGroup grp = SCR_AIGroup.Cast(s_PlayerGroup);
+		if (grp)
+		{
+			vector origin = grp.GetOrigin();
+			if (origin != "0 0 0")
+				return origin;
+		}
+
+		// Method 2: iterate all players 1-32 (same pattern as LLMBridge.FindPlayerGroup)
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (pm)
+		{
+			for (int pid = 1; pid <= 32; pid++)
+			{
+				IEntity pEnt = pm.GetPlayerControlledEntity(pid);
+				if (pEnt)
+					return pEnt.GetOrigin();
+			}
+		}
+
+		return "0 0 0";
+	}
+
 	static SCR_AIGroup GetPlayerGroup()
 	{
 		return s_PlayerGroup;
