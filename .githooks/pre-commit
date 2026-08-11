@@ -1,22 +1,51 @@
 #!/usr/bin/env bash
-# Guards: (1) sync drift  (2) secrets  (3) mod GUID
+# Guards: (1) sync drift  (2) secrets  (3) mod GUID  (4) no .pak in repo  (5) no Workshop .pak
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# (1) Check AGENTS.md sync with CLAUDE.md and .goosehints
 for f in CLAUDE.md .goosehints; do
   if [ -f "$f" ]; then
     diff -q AGENTS.md "$f" >/dev/null || { echo "ERROR: $f out of sync with AGENTS.md - run scripts/sync-agent-docs"; exit 1; }
   fi
 done
 
+# (2) Block config.json (contains API key)
 if git diff --cached --name-only | grep -q "^python_bridge/config.json$"; then
   echo "ERROR: python_bridge/config.json contains secrets and is gitignored - do not force-add it!"
   exit 1
 fi
 
+# (3) Block GUID changes in addon.gproj
 if git diff --cached --name-only | grep -q "addon.gproj$"; then
   grep -q 'GUID "7E5A1C9B3D8F2406"' reforger_mod/addons/ReforgerLLMSquad/addon.gproj || {
     echo "ERROR: mod GUID in addon.gproj changed - that breaks launch_reforger.bat (-addons 7E5A1C9B3D8F2406)!"
     exit 1
   }
 fi
+
+# (4) Block .pak files from being committed to the repo
+if git diff --cached --name-only | grep -qi '\.pak$'; then
+  echo "ERROR: .pak files must NOT be committed — they cause script mismatch on DS."
+  echo "       .pak files belong only in the Workshop cache, never in git."
+  echo "       Run: powershell scripts/sync_mod.ps1 to manage Workshop cache."
+  exit 1
+fi
+
+# (5) Warn if Workshop cache has .pak files (check filesystem, not git)
+WS_DIR="$USERPROFILE/../../OneDrive/Documents/My Games/ArmaReforger/addons/ReforgerLLMSquadControl_7E5A1C9B3D8F2406"
+# Try common Windows paths
+for p in \
+  "C:/Users/$USERPROFILE/OneDrive/Documents/My Games/ArmaReforger/addons/ReforgerLLMSquadControl_7E5A1C9B3D8F2406" \
+  "C:/Users/onyou/OneDrive/Documents/My Games/ArmaReforger/addons/ReforgerLLMSquadControl_7E5A1C9B3D8F2406"; do
+  if [ -d "$p" ]; then
+    PAK_COUNT=$(find "$p" -maxdepth 1 -name "*.pak" 2>/dev/null | wc -l)
+    if [ "$PAK_COUNT" -gt 0 ]; then
+      echo "WARNING: $PAK_COUNT .pak file(s) found in Workshop cache ($p)"
+      echo "         This will cause script mismatch (client compiles old .pak, DS compiles new .c)"
+      echo "         Run: powershell scripts/sync_mod.ps1 to remove .pak and sync .c files"
+      echo "         DO NOT restart the DS until this is fixed!"
+    fi
+    break
+  fi
+done

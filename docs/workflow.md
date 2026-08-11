@@ -7,17 +7,20 @@
 ### 1. Edit Mod Source
 Edit `.c` files in: `reforger_mod/addons/ReforgerLLMSquad/Scripts/Game/`
 
-### 2. Sync to 3 Locations
-The DS compiles from the Workshop cache, NOT the local source. You must sync:
+### 2. Sync to BOTH DS locations (one command)
 ```powershell
-$src = "Q:\GAMES\Reforger-LLM-Squad\reforger_mod\addons\ReforgerLLMSquad\Scripts\Game"
-$ds = "Q:\SteamLibrary\steamapps\common\Arma Reforger Server\addons\ReforgerLLMSquad\Scripts\Game"
-$ws = "C:\Users\onyou\OneDrive\Documents\My Games\ArmaReforger\addons\ReforgerLLMSquadControl_7E5A1C9B3D8F2406\Scripts\Game"
-
-Copy-Item "$src\LLMBridge.c" "$ds\LLMBridge.c" -Force
-Copy-Item "$src\LLMBridge.c" "$ws\LLMBridge.c" -Force
-# Repeat for each changed file
+powershell -NoProfile -File scripts\sync_mod.ps1
 ```
+This script:
+- Copies ALL `.c` files from source to DS local addons AND Workshop cache
+- **Removes `.pak` files** from Workshop cache (prevents script mismatch)
+- Verifies file counts match
+- Use `-CheckOnly` to just check without copying: `sync_mod.ps1 -CheckOnly`
+
+**Why both locations?** The Workshop cache OVERRIDES the DS local addons.
+If you only sync to DS local, the DS compiles OLD code from the Workshop cache.
+If a `.pak` exists in the Workshop cache, the client downloads it (old code)
+while the DS compiles loose `.c` (new code) -> CRC mismatch -> "script mismatch".
 
 ### 3. Restart DS + Check Compile
 ```batch
@@ -108,7 +111,16 @@ REM Wait ~6s for startup
 
 ### DS-Specific Lessons
 
-11. **Workshop cache overrides DS local addons**
+11. **Workshop cache overrides DS local addons (CRITICAL)**
+    - The DS downloads the mod from BI Workshop on first start
+    - The cached version lives in `Documents\My Games\ArmaReforger\addons\`
+    - This OVERRIDES the DS local addons directory
+    - You MUST sync .c files to BOTH locations or the DS compiles old code
+    - **NEVER leave a `.pak` in the Workshop cache** — if the .pak exists, the client
+      downloads old compiled scripts while the DS compiles new loose .c files
+      -> CRC mismatch -> "script mismatch" -> client cannot join
+    - After ANY Workbench publish, run `scripts\sync_mod.ps1` to remove .pak + sync .c
+    - Run `scripts\sync_mod.ps1 -CheckOnly` to check without modifying
     - The DS downloads the mod from BI Workshop on first start
     - The cached version lives in `Documents\My Games\ArmaReforger\addons\`
     - This OVERRIDES the DS local addons directory
@@ -143,7 +155,7 @@ REM Wait ~6s for startup
 ## Test Cycle Checklist
 
 - [ ] Edit `.c` files in `reforger_mod/addons/`
-- [ ] Sync to DS local + Workshop cache (BOTH locations)
+- [ ] Run `powershell -NoProfile -File scripts\sync_mod.ps1` (syncs + removes .pak)
 - [ ] Kill DS, restart via `launch_ds.bat`
 - [ ] Wait 55s, run `check_latest_log.ps1` → must report OK
 - [ ] If bridge changed: restart bridge, wait 6s

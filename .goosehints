@@ -8,6 +8,17 @@
 
 These mistakes already cost a full debug session (2026-08-07). Do not repeat them:
 
+4. **NEVER publish the mod to BI Workshop via Workbench without running `scripts\sync_mod.ps1` afterwards!**
+   Workbench publishing creates a `data.pak` in the Workshop cache
+   (`Documents\My Games\ArmaReforger\addons\ReforgerLLMSquadControl_7E5A1C9B3D8F2406\`).
+   This `.pak` contains the scripts AT THE TIME OF PUBLISHING — it becomes stale the moment you edit any `.c` file.
+   - **DS** compiles loose `.c` files (new code, 5639 files)
+   - **Client** downloads the `.pak` (old code, 5637 files)
+   - **Result**: CRC mismatch → "script mismatch" → client cannot join
+   - **FIX**: After ANY edit to `.c` files, run: `powershell -NoProfile -File scripts\sync_mod.ps1`
+   - This script syncs loose `.c` files to BOTH DS local + Workshop cache AND removes stale `.pak` files.
+   - **NEVER** delete the Workshop cache directory itself — only remove `.pak` and `.rdb` files from it.
+
 1. **`-mod=` does NOT exist in Arma Reforger** (that is Arma 3/DayZ). The engine ignores it WITHOUT warning. Correct: `-addonsDir <path> -addons <GUID>`.
 2. **ALWAYS start the game with working directory = game dir.** Otherwise the engine cannot find `./addons` → `Can't find '58D0FB3206B6F859' game addon!` (= the BASE GAME is missing, NOT your mod) → Engine Initialization Error. `launch_reforger.bat` does this correctly (`start /d`).
 3. **GUID `58D0FB3206B6F859` = the base game** (`addons\data\ArmaReforger.gproj`). Our mod GUID = `7E5A1C9B3D8F2406`. Never swap or reuse them (the pre-commit hook guards this).
@@ -24,6 +35,7 @@ These mistakes already cost a full debug session (2026-08-07). Do not repeat the
 | Verify result | ~50s after DS start: `powershell -NoProfile -File scripts\check_latest_log.ps1` (checks newest console.log) |
 | Claiming "done" | ONLY if that script reports `OK` |
 | Writing game scripts | FIRST read `@docs/skills/enforce-script.md`; only use patterns from it |
+| After editing .c files | Run `powershell -NoProfile -File scripts\sync_mod.ps1` (syncs to DS + Workshop cache, removes .pak) |
 | Editing AGENTS.md | run `scripts\sync-agent-docs.bat` before committing |
 
 NEVER: invent your own launch commands · reuse GUIDs · `git add -f` on gitignored files · commit `config.json` · claim "fixed" without log evidence.
