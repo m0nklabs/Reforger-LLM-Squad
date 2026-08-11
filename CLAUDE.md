@@ -142,6 +142,20 @@ Never invent these — every single one has already gone wrong once:
 37. **ChimeraCharacterController NOT available as script type (2026-08-11, F6)**: Neither `ChimeraCharacterController` nor `SCR_CharacterController` can be used with `Cast()` or `FindComponent()` in Enforce Script (build 190965). Both produce "Unknown type" compile errors. This is likely because character controllers are engine-internal sealed classes not exposed to the script type system. Avoid `GetLifeState()`, `IsUnconscious()`, `IsDead()` on character controllers. Future: investigate `DamageManagerComponent` or `SCR_DamageManagerComponent` for health state detection.
 38. **F5: Battle Memory (2026-08-11)**: Bridge maintains a rolling `battle_log` (last 15 events) in `app_state`. Events logged on every SITREP: ORDER (LLM action != HOLD), CONTACT (enemies detected), CRITICAL (leader downed), RECOVERY (leader back up). `get_battle_memory(max_events=8)` returns formatted event list included in `call_llm()` system prompt and `generate_ai_thoughts()` (3 events). LLM now has context of what happened in previous turns. Verified: battle_log populated with ENGAGE orders and enemy contacts. Events persist across SITREPs (not cleared on dedup skip).
 39. **F6: Medic Rescue (2026-08-11)**: `leader_state` field added to SITREP JSON (alive/downed/dead). `GetPlayerLifeState()` in LLMBridge.c checks player entity (currently defaults to "alive" — see rule 37). Bridge tracks `last_leader_state` — state change triggers new LLM call (in fingerprint). `MEDIC` added to `ISSUE_ORDER_FUNCTION` enum. On MEDIC action: game creates Follow waypoint at leader position (squad runs to rescue). System prompt instructs LLM: "If LEADER STATUS shows DOWNED, prioritize MEDIC action". Live orders also support `medic` command via /orders.
+40. **Individual AI Soldier Memory (2026-08-11, DEVELOPMENT ROADMAP)**: Each AI squad member is a unique personality with their own memory file (`python_bridge/ai_soldiers/{name}.json`). NOT shared/global memory. Each soldier tracks: name, personality, birth_date, personal event log, opinions, mood, relationships, status (alive/dead). When a soldier dies in-game: file is marked `status=dead, death_date=<timestamp>` and retained for 7 days for debugging, then archived to `ai_soldiers/graveyard/`. Thoughts are generated based on personal history, not just current SITREP. This makes each soldier feel like a real person who remembers what they've been through.
+41. **Eureka Workflow (2026-08-11, MANDATORY)**: At every eureka moment (breakthrough discovery, major bug fix, new feature working, important lesson learned):
+    1. Update `AGENTS.md` with the new knowledge (rule, status entry, or both)
+    2. Run `scripts\sync-agent-docs.bat` to sync to CLAUDE.md + .goosehints
+    3. Commit with descriptive message
+    4. Push to GitHub: `git push origin main`
+    This ensures knowledge is never lost and the team always has the latest context.
+42. **AGENTS.md Maintenance (2026-08-11)**: AGENTS.md is the single source of truth. Keep it current:
+    - After every feature implementation → update Status & roadmap
+    - After every hard-won lesson → add a rule
+    - After every debugging session → update relevant rules
+    - Remove obsolete info when patterns are replaced
+    - Run `scripts\sync-agent-docs.bat` BEFORE committing
+    - Push to GitHub after significant updates
 
 ## Available agents (Copilot custom)
 - No `.github/agents/` or `.github/chatmodes/` present (as of 2026-08-07).
@@ -206,6 +220,11 @@ Never invent these — every single one has already gone wrong once:
 - F4 (2026-08-11): Vehicle mount/dismount commands. MOUNT/DISMOUNT in LLM enum, AutoSquadManager.MountNearestVehicle() + DismountVehicle(). Also fixed Stavka offset bug: BLUFOR position now found via SCR_AIWorld.GetBLUFORPosition() (was returning <0,0,0>), LLM prompt stripped of absolute coords (was returning absolute coords as offset), offset clamped to 500m max.
 - F5 (2026-08-11): Battle Memory — bridge maintains rolling battle_log (15 events), included in LLM prompt. LLM now remembers previous orders, enemy contacts, and critical events. Verified on DS: battle_log populated, leader_state in fingerprint.
 - F6 (2026-08-11): Medic Rescue — leader_state (alive/downed/dead) in SITREP JSON + fingerprint. MEDIC action in LLM enum: squad runs to downed leader with Follow waypoint. Downed detection TODO (rule 37: ChimeraCharacterController not available as script type). Framework ready for when correct API is found.
+- **F7 (2026-08-11, ROADMAP): Individual AI Soldier Memory** — Each AI soldier gets personal memory file (`ai_soldiers/{name}.json`) with: name, personality, birth_date, personal event log, opinions, mood, relationships, alive/dead status. NOT shared memory. Events logged per-soldier (contact, casualties, order changes). Thoughts generated from personal history. Death = retain file 7 days for debugging, then archive to `graveyard/`. Makes soldiers feel like real people who remember their experiences.
+- **Eureka Workflow (2026-08-11, MANDATORY)**: At every breakthrough/fix/discovery: update AGENTS.md → sync docs → commit → push to GitHub. Knowledge is never lost.
+- **Event-driven thoughts (2026-08-11)**: Replaced 30s thought timer with event detection. Thoughts trigger on: contact (enemy detected), clear (enemies eliminated), order_change (LLM order changed), casualty (squad member lost), idle (60s fallback). 15s cooldown between thought polls. Event context added to LLM prompt so thoughts are reactive, not scheduled.
+- **Dynamic faction (2026-08-11)**: Squad soldier prefab + OPFOR faction now dynamic based on player faction. US player → US squad + USSR OPFOR. USSR player → USSR squad + US OPFOR. Faction set via FactionManager.GetPlayerFaction() per-soldier.
+- **Stavka disabled (2026-08-11)**: Stavka OPFOR spawning disabled — vanilla 23_Campaign already has OPFOR/FIA forces. Stavka was spawning additional OPFOR on top of vanilla, causing enemies near spawn. Controller kept alive for future use.
 - Launch diagnosis: `MOD_SETUP.md`.
 
 ## References

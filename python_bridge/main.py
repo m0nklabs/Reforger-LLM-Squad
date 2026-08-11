@@ -9,6 +9,7 @@ F2.x: Live orders — /orders endpoint for real-time debugging without game rest
 
 import json
 import time
+import os
 import math
 import logging
 from typing import Optional, List
@@ -18,7 +19,8 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from openai import OpenAI
 
-import os
+from pathlib import Path
+from datetime import datetime
 
 # =======================================================================
 # Fix: Handle Reforger's HTTP Upgrade headers gracefully (root cause fix)
@@ -90,6 +92,8 @@ voice_handler = VoiceHandler(
 # Phase 3: TTS squad feedback (edge-tts + pyttsx3 fallback)
 from tts_handler import TTSHandler
 tts_handler = TTSHandler(CONFIG.get("tts", {}))
+
+app = FastAPI(title="Reforger LLM Squad Control Bridge")
 
 # --- Pydantic Models ---
 
@@ -171,6 +175,130 @@ MEDIC = emergency rescue: move squad to downed leader position to revive and pro
 If LEADER STATUS shows DOWNED, prioritize MEDIC action — get to the leader and provide cover.
 Remember events from RECENT BATTLE EVENTS when making decisions — this is your squad's memory."""
 
+
+# ─── F7: Individual AI Soldier Memory ──────────────────────────────────
+SOLDIER_MEMORY_DIR = Path("ai_soldiers")
+SOLDIER_GRAVEYARD_DIR = Path("ai_soldiers/graveyard")
+SOLDIER_RETENTION_DAYS = 7  # Keep dead soldier files for 7 days
+
+def ensure_soldier_dirs():
+    """Create soldier memory directories if they don't exist."""
+    SOLDIER_MEMORY_DIR.mkdir(exist_ok=True)
+    SOLDIER_GRAVEYARD_DIR.mkdir(exist_ok=True)
+
+def load_soldier_memory(name: str) -> dict:
+    """Load a soldier's personal memory file. Create if not exists."""
+    ensure_soldier_dirs()
+    filepath = SOLDIER_MEMORY_DIR / f"{name}.json"
+    if filepath.exists():
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass  # Corrupt file, recreate
+    
+    # Create new soldier memory
+    return {
+        "name": name,
+        "personality": None,  # Assigned on first thought generation
+        "birth_date": datetime.now().isoformat(),
+        "death_date": None,
+        "status": "alive",
+        "events": [],  # Personal event log: [{"time": ..., "type": ..., "desc": ...}]
+        "opinions": [],  # Formed opinions: [{"topic": ..., "opinion": ...}]
+        "mood": "neutral",
+        "last_thought": None,
+        "relationships": {},  # {"Alpha_2": "trusted", "Alpha_3": "annoying"}
+        "kills": 0,
+        "battles_survived": 0,
+    }
+
+def save_soldier_memory(name: str, memory: dict):
+    """Save a soldier's personal memory file."""
+    ensure_soldier_dirs()
+    filepath = SOLDIER_MEMORY_DIR / f"{name}.json"
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(memory, f, indent=2, ensure_ascii=False)
+
+def log_soldier_event(name: str, event_type: str, description: str):
+    """Log an event to a soldier's personal memory."""
+    mem = load_soldier_memory(name)
+    mem["events"].append({
+        "time": datetime.now().isoformat(),
+        "type": event_type,
+        "desc": description,
+    })
+    # Keep last 50 events per soldier (rolling window)
+    if len(mem["events"]) > 50:
+        mem["events"] = mem["events"][-50:]
+    save_soldier_memory(name, mem)
+
+def mark_soldier_dead(name: str):
+    """Mark a soldier as dead. Retain file for debugging."""
+    mem = load_soldier_memory(name)
+    mem["status"] = "dead"
+    mem["death_date"] = datetime.now().isoformat()
+    save_soldier_memory(name, mem)
+
+def cleanup_dead_soldiers():
+    """Archive dead soldier files older than retention period."""
+    ensure_soldier_dirs()
+    cutoff = time.time() - (SOLDIER_RETENTION_DAYS * 86400)
+    for filepath in SOLDIER_MEMORY_DIR.glob("*.json"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            if mem.get("status") == "dead" and mem.get("death_date"):
+                death_time = datetime.fromisoformat(mem["death_date"]).timestamp()
+                if death_time < cutoff:
+                    # Archive to graveyard
+                    archive_path = SOLDIER_GRAVEYARD_DIR / filepath.name
+                    filepath.rename(archive_path)
+        except (json.JSONDecodeError, IOError, ValueError):
+            pass  # Skip corrupt files
+
+def get_soldier_history_summary(name: str, max_events: int = 5) -> str:
+    """Get a formatted summary of a soldier's personal history for LLM prompt."""
+    mem = load_soldier_memory(name)
+    lines = []
+    
+    # Status
+    if mem["status"] == "dead":
+        lines.append(f"[KIA - died {mem.get('death_date', 'unknown')[:10]}]")
+    
+    # Personality
+    p = mem.get("personality", "unknown")
+    lines.append(f"Personality: {p}")
+    
+    # Recent events
+    events = mem.get("events", [])
+    if events:
+        recent = events[-max_events:]
+        lines.append("Recent experiences:")
+        for e in recent:
+            t = e.get("time", "")[-8:-3]  # HH:MM
+            lines.append(f"  [{t}] {e.get('type', '?')}: {e.get('desc', '')}")
+    else:
+        lines.append("No prior combat experience (new recruit).")
+    
+    # Battle count
+    battles = mem.get("battles_survived", 0)
+    if battles > 0:
+        lines.append(f"Survived {battles} engagement(s).")
+    
+    # Kills
+    kills = mem.get("kills", 0)
+    if kills > 0:
+        lines.append(f"Confirmed kills: {kills}")
+    
+    # Last mood
+    mood = mem.get("mood", "neutral")
+    if mood != "neutral":
+        lines.append(f"Current mood: {mood}")
+    
+    return "\n".join(lines)
+
+
 app_state = {
     "last_sitrep": None,
     "health_check_time": time.time(),
@@ -197,7 +325,9 @@ app_state = {
     "last_sitrep_time": time.time(),  # updated on every SITREP; LLM skipped if stale > 90s
     # F5: Battle Memory — rolling event log for LLM context
     "battle_log": [],                # last 15 events, included in LLM prompts
-    "last_leader_state": "alive",    # F6: track leader state changes
+    "last_leader_state": "alive",
+    "last_squad_names": [],  # Track squad member names for death detection
+    "soldier_memory_enabled": True,    # F6: track leader state changes
 }
 
 def add_battle_event(event_type: str, description: str):
@@ -377,6 +507,9 @@ def assign_personalities(squad):
 def generate_ai_thoughts(event: str = ""):
     """Generate thoughts for squad members, triggered by events.
     
+    Each soldier has their own personal memory file. Thoughts are generated
+    based on their personal history, not just the current SITREP.
+    
     Event types:
     - "contact": enemy detected, thoughts should be tactical/urgent
     - "clear": enemies eliminated, thoughts about survival/relief
@@ -396,6 +529,48 @@ def generate_ai_thoughts(event: str = ""):
 
     assign_personalities(sitrep.squad)
 
+    # ─── Per-soldier memory: log events to individual files ────────────
+    current_names = set()
+    for m in sitrep.squad:
+        current_names.add(m.name)
+        # Ensure soldier memory file exists
+        mem = load_soldier_memory(m.name)
+        # Assign personality if not set
+        if not mem.get("personality"):
+            p = app_state["ai_personalities"].get(m.name, "STEADY")
+            mem["personality"] = p
+            save_soldier_memory(m.name, mem)
+        
+        # Log events to individual soldier memory
+        if event == "contact":
+            log_soldier_event(m.name, "contact", "Enemy contact detected")
+        elif event == "clear":
+            log_soldier_event(m.name, "clear", "Area cleared, enemies eliminated")
+            mem = load_soldier_memory(m.name)
+            mem["battles_survived"] = mem.get("battles_survived", 0) + 1
+            save_soldier_memory(m.name, mem)
+        elif event == "order_change":
+            log_soldier_event(m.name, "order_change", f"Orders changed to {m.order}")
+        elif event == "casualty":
+            log_soldier_event(m.name, "casualty", "Squad member lost in action")
+        elif event == "leader_downed":
+            log_soldier_event(m.name, "leader_down", "Squad leader was downed!")
+
+    # ─── Death detection: check for missing squad members ──────────────
+    last_names = set(app_state.get("last_squad_names", []))
+    if last_names:
+        dead_soldiers = last_names - current_names
+        for dead_name in dead_soldiers:
+            mark_soldier_dead(dead_name)
+            # Log to surviving soldiers
+            for m in sitrep.squad:
+                log_soldier_event(m.name, "teammate_kia", f"{dead_name} was killed in action")
+    
+    app_state["last_squad_names"] = list(current_names)
+    
+    # Cleanup old dead soldier files
+    cleanup_dead_soldiers()
+
     # Dedup: still use fingerprint but event changes it
     fp = _sitrep_fingerprint(sitrep) + "|event=" + event
     if fp == app_state["last_thought_fingerprint"] and app_state["cached_thoughts"] and event == "":
@@ -404,195 +579,35 @@ def generate_ai_thoughts(event: str = ""):
     app_state["last_thought_fingerprint"] = fp
     app_state["thought_calls"] += 1
 
-    # Build member descriptions
-    member_lines = []
-    for m in sitrep.squad:
-        p = app_state["ai_personalities"].get(m.name, "STEADY")
-        member_lines.append(f"- {m.name} ({p}): order={m.order}, sitrep={m.sitrep}")
-
+    # ─── Build per-soldier context with personal memory ────────────────
     situation = get_situation_text(sitrep) + get_battle_memory(3)
-    members_text = "\n".join(member_lines)
     
     # Event-specific context
     event_context = ""
     if event == "contact":
-        event_context = "
-EVENT: Enemy contact detected! The squad just spotted hostiles. Thoughts should reflect urgency and combat awareness.
-"
+        event_context = "\nEVENT: Enemy contact detected! The squad just spotted hostiles. Thoughts should reflect urgency and combat awareness.\n"
     elif event == "clear":
-        event_context = "
-EVENT: All enemies eliminated. Area is clear. Thoughts should reflect relief, survival, maybe dark humor.
-"
+        event_context = "\nEVENT: All enemies eliminated. Area is clear. Thoughts should reflect relief, survival, maybe dark humor.\n"
     elif event == "order_change":
-        event_context = "
-EVENT: Orders just changed. React to the new order immediately.
-"
+        event_context = "\nEVENT: Orders just changed. React to the new order immediately.\n"
     elif event == "casualty":
-        event_context = "
-EVENT: A squad member just went down. React with grief, anger, or determination. Keep it short.
-"
+        event_context = "\nEVENT: A squad member just went down. React with grief, anger, or determination. Keep it short.\n"
     elif event == "idle":
-        event_context = "
-CONTEXT: Quiet moment, no immediate threats. Casual banter, checking on each other, or observing surroundings.
-"
+        event_context = "\nCONTEXT: Quiet moment, no immediate threats. Casual banter, checking on each other, or observing surroundings.\n"
     elif event == "leader_downed":
-        event_context = "
-EVENT: The squad leader is DOWN! Panic, urgency, calls for medic, protective instinct.
-"
+        event_context = "\nEVENT: The squad leader is DOWN! Panic, urgency, calls for medic, protective instinct.\n"
     elif event == "leader_recovered":
-        event_context = "
-EVENT: The squad leader is back up. Relief, determination, ready to continue.
-"
+        event_context = "\nEVENT: The squad leader is back up. Relief, determination, ready to continue.\n"
     
-    prompt = f"Situation:\n{situation}\n{event_context}\nSquad members:\n{members_text}\n\nGenerate one thought per member reacting to the current situation."
-
-    # Safety net: skip LLM if no SITREPs received in 90s (no active players)
-    if time.time() - app_state.get("last_sitrep_time", 0) > 90:
-        return {"thoughts": []}
-
-    assign_personalities(sitrep.squad)
-
-    # Dedup: skip LLM if situation unchanged
-    fp = _sitrep_fingerprint(sitrep)
-    if fp == app_state["last_thought_fingerprint"] and app_state["cached_thoughts"]:
-        return app_state["cached_thoughts"]
-
-    app_state["last_thought_fingerprint"] = fp
-    app_state["thought_calls"] += 1
-
-    # Build member descriptions
+    # Build member descriptions WITH personal memory
     member_lines = []
     for m in sitrep.squad:
         p = app_state["ai_personalities"].get(m.name, "STEADY")
-        member_lines.append(f"- {m.name} ({p}): order={m.order}, sitrep={m.sitrep}")
-
-    situation = get_situation_text(sitrep) + get_battle_memory(3)
+        history = get_soldier_history_summary(m.name, max_events=5)
+        member_lines.append(f"- {m.name} ({p}):\n{history}\n  Current: order={m.order}, sitrep={m.sitrep}")
+    
     members_text = "\n".join(member_lines)
-    prompt = f"Situation:\n{situation}\n\nSquad members:\n{members_text}\n\nGenerate one thought per member."
-
-    try:
-        # Simple prompt — let model output plain text, parse line by line
-        # 3B models struggle with complex JSON schemas, so keep it simple
-        simple_prompt = f"""Generate one short thought (max 15 words) for each squad member based on their personality and the situation. 
-
-Format each as: [Name] thought text
-
-Squad members:
-{members_text}
-
-Situation: {situation}
-
-Output:"""
-        
-        response = client.chat.completions.create(
-            model=CONFIG["llm"]["model"],
-            messages=[
-                {"role": "system", "content": "You generate personality-driven thoughts for AI soldiers. Each member has a personality that shapes their thoughts. Be concise and in-character."},
-                {"role": "user", "content": simple_prompt}
-            ],
-            max_tokens=200,
-            temperature=0.8
-        )
-        
-        content = response.choices[0].message.content if response.choices else ""
-        if not content or not content.strip():
-            logger.warning("AI thought: LLM returned empty content")
-            return {"thoughts": []}
-        
-        # Parse plain text: [Name] thought text  OR  Name: thought
-        thoughts = []
-        for line in content.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            # Try [Name] thought format
-            if "[" in line and "]" in line:
-                b_start = line.index("[")
-                b_end = line.index("]", b_start)
-                name = line[b_start+1:b_end].strip()
-                thought = line[b_end+1:].lstrip(":").strip().strip('"\'')
-                # Clean name: strip "thought" suffix if model included it
-                name = name.replace(" thought", "").strip()
-                if name and thought:
-                        thoughts.append({"name": name.strip(" -"), "thought": thought, "mood": "neutral"})
-            elif ":" in line:
-                colon_idx = line.index(":")
-                name = line[:colon_idx].strip(" -")
-                thought = line[colon_idx+1:].strip().strip('"\'')
-                # Clean name: strip "thought" suffix
-                name = name.replace(" thought", "").strip()
-                if name and thought and len(name) < 20:
-                    thoughts.append({"name": name, "thought": thought, "mood": "neutral"})
-        
-        if not thoughts:
-            logger.warning(f"AI thought: could not parse thoughts from: {content[:100]}")
-            return {"thoughts": []}
-        
-        result = {"thoughts": thoughts}
-        app_state["cached_thoughts"] = result
-        app_state["llm_calls"] += 1
-        logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
-        for t in thoughts:
-            logger.info(f"  [{t['name']}] {t['thought'][:80]}")
-        return result
-    except Exception as e:
-        logger.error(f"AI thought generation failed: {e}")
-        app_state["errors"] += 1
-
-    return {"thoughts": []}
-
-# =======================================================================
-# /ai_thought — F2.7: Individual AI Brains
-# Game polls this endpoint to get thoughts for each AI squad member
-# =======================================================================
-async def lifespan(app: FastAPI):
-    logger.info("=== Reforger LLM Bridge Starting ===")
-    logger.info(f"Proxy URL: {CONFIG['llm']['base_url']}")
-    logger.info(f"Model: {CONFIG['llm']['model']}")
-    logger.info(f"Port: {CONFIG['server']['port']}")
-    try:
-        test_response = client.chat.completions.create(model=CONFIG["llm"]["model"], messages=[{"role": "user", "content": "Test"}], max_tokens=10)
-        logger.info(f"Proxy connection OK: {test_response.model}")
-    except Exception as e:
-        logger.warning(f"Proxy connection failed: {e}")
-
-    # Phase 2: Start voice handler if enabled
-    def on_voice_transcription(text: str):
-        """Called when PTT release transcribes speech to text."""
-        logger.info(f"[Voice] Transcription: \"{text}\" → forwarding to LLM")
-        situation = get_situation_text(app_state.get("last_sitrep")) if app_state.get("last_sitrep") else "No squad data."
-        response = call_llm(command=text, situation=situation)
-        # Phase 3: TTS speak
-        if response.voice_reply:
-            tts_handler.speak(response.voice_reply, member_index=0)
-        # Queue the LLM response as a pending order for the game to pick up
-        order = {
-            "cmd": "mount" if response.action == "MOUNT" else ("dismount" if response.action == "DISMOUNT" else ("move" if response.action in ("MOVE", "ENGAGE", "FLANK") else response.action.lower())),
-            "action": response.action,
-            "offset": response.target_offset,
-            "voice_reply": response.voice_reply,
-            "source": "voice",
-            "transcription": text
-        }
-        app_state["pending_orders"].append(order)
-        logger.info(f"[Voice] LLM response queued: action={response.action}, offset={response.target_offset}")
-
-    voice_handler._on_transcription = on_voice_transcription
-    voice_handler.start()
-
-    # Phase 3: Start TTS handler
-    tts_handler.start()
-
-    yield
-    logger.info("=== Reforger LLM Bridge Shutting Down ===")
-    voice_handler.stop()
-    tts_handler.stop()
-
-app = FastAPI(title="Reforger LLM Squad Control", version="2.0.0", lifespan=lifespan)
-
-# =======================================================================
-# GET /health
-# =======================================================================
+    prompt = f"Situation:\n{situation}\n{event_context}\nSquad members (with personal history):\n{members_text}\n\nGenerate one thought per member reacting to the situation. The thought should reflect their personality AND their personal experiences. A veteran who has survived 5 battles sounds different from a rookie on their first day."
 @app.get("/health")
 async def health_check():
     uptime = time.time() - app_state["health_check_time"]
@@ -892,3 +907,37 @@ if __name__ == "__main__":
         limit_concurrency=20,
         timeout_graceful_shutdown=5,
     )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """F7: Initialize soldier memory system on startup."""
+    ensure_soldier_dirs()
+    cleanup_dead_soldiers()
+    print(f"[F7] Soldier memory system initialized: {SOLDIER_MEMORY_DIR}")
+
+
+@app.get("/soldiers")
+async def get_soldier_memories():
+    """F7: List all soldier memory files (for debugging)."""
+    ensure_soldier_dirs()
+    soldiers = []
+    for filepath in SOLDIER_MEMORY_DIR.glob("*.json"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            soldiers.append({
+                "name": mem.get("name", filepath.stem),
+                "status": mem.get("status", "unknown"),
+                "personality": mem.get("personality", "?"),
+                "events": len(mem.get("events", [])),
+                "battles": mem.get("battles_survived", 0),
+                "kills": mem.get("kills", 0),
+                "mood": mem.get("mood", "?"),
+                "last_thought": (mem.get("last_thought", "") or "")[:80],
+                "birth_date": mem.get("birth_date", "")[:10],
+                "death_date": (mem.get("death_date", "") or "")[:10],
+            })
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"soldiers": soldiers, "total": len(soldiers)}
