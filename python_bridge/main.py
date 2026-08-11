@@ -141,7 +141,7 @@ ISSUE_ORDER_FUNCTION = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["ENGAGE", "MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD", "MOUNT", "DISMOUNT"]},
+            "action": {"type": "string", "enum": ["ENGAGE", "MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD", "MOUNT", "DISMOUNT", "MEDIC"]},
             "target_offset": {
                 "type": "array",
                 "items": {"type": "number"},
@@ -166,7 +166,10 @@ Respond with valid JSON only. Direction guide for target_offset [dx, dz]:
 Keep offsets 50-300m. No enemies nearby = HOLD with [0, 0].
 If enemies are detected, ENGAGE with offset toward nearest enemy, or FLANK to approach from the side, or RETREAT if outnumbered.
 MOUNT = order squad to enter nearest vehicle (for fast travel or retreat). DISMOUNT = exit vehicle.
-Use MOUNT when squad needs to cover large distances quickly or retreat from overwhelming force."""
+Use MOUNT when squad needs to cover large distances quickly or retreat from overwhelming force.
+MEDIC = emergency rescue: move squad to downed leader position to revive and protect. Use when leader_state=DOWNED.
+If LEADER STATUS shows DOWNED, prioritize MEDIC action — get to the leader and provide cover.
+Remember events from RECENT BATTLE EVENTS when making decisions — this is your squad's memory."""
 
 app_state = {
     "last_sitrep": None,
@@ -192,7 +195,27 @@ app_state = {
     "cached_stavka_orders": None,
     # Player activity tracking
     "last_sitrep_time": time.time(),  # updated on every SITREP; LLM skipped if stale > 90s
+    # F5: Battle Memory — rolling event log for LLM context
+    "battle_log": [],                # last 15 events, included in LLM prompts
+    "last_leader_state": "alive",    # F6: track leader state changes
 }
+
+def add_battle_event(event_type: str, description: str):
+    """F5: Add an event to the battle memory log."""
+    event = f"[{time.strftime('%H:%M:%S')}] {event_type}: {description}"
+    app_state["battle_log"].append(event)
+    while len(app_state["battle_log"]) > 15:
+        app_state["battle_log"].pop(0)
+    logger.info(f"Battle log: {event}")
+
+
+def get_battle_memory(max_events=8):
+    """F5: Return formatted battle memory for LLM prompt."""
+    if not app_state.get("battle_log"):
+        return ""
+    recent = app_state["battle_log"][-max_events:]
+    return "\nRECENT BATTLE EVENTS (most recent last):\n" + "\n".join(f"  {e}" for e in recent)
+
 
 def get_situation_text(sitrep: SitRepRequest) -> str:
     lines = []
@@ -204,6 +227,12 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
             lines.append(f"Squad position: ({pos[0]:.1f}, {pos[1] if len(pos) > 1 else 0:.1f}, {pos[2] if len(pos) > 2 else 0:.1f})")
         else:
             lines.append(f"Squad position: {pos}")
+    # F6: Leader state (downed/alive/dead)
+    leader_state = "alive"
+    if sitrep.model_extra:
+        leader_state = sitrep.model_extra.get("leader_state", "alive")
+    if leader_state != "alive":
+        lines.append(f"LEADER STATUS: {leader_state.upper()}!")
     for m in sitrep.squad:
         lines.append(f"  {m.name}: order={m.order}, sitrep={m.sitrep}")
     # F3.4: Enemy contact info
@@ -247,10 +276,15 @@ def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
         parts.append(f"e{int(e.get('dx',0)//50)}:{int(e.get('dz',0)//50)}")
     # F3.5: Include environment (time changes trigger new calls)
     parts.append(f"env={sitrep.environment[:20] if sitrep.environment else 'none'}")
+    # F6: Leader state in fingerprint (state change triggers new LLM call)
+    if sitrep.model_extra:
+        parts.append(f"leader={sitrep.model_extra.get('leader_state', 'alive')}")
     return "|".join(parts)
 
 def call_llm(command: str, situation: str) -> SitRepResponse:
     app_state["llm_calls"] += 1
+    # F5: Include battle memory in situation
+    situation = situation + get_battle_memory()
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(situation=situation)},
         {"role": "user", "content": command}
@@ -366,7 +400,7 @@ def generate_ai_thoughts():
         p = app_state["ai_personalities"].get(m.name, "STEADY")
         member_lines.append(f"- {m.name} ({p}): order={m.order}, sitrep={m.sitrep}")
 
-    situation = get_situation_text(sitrep)
+    situation = get_situation_text(sitrep) + get_battle_memory(3)
     members_text = "\n".join(member_lines)
     prompt = f"Situation:\n{situation}\n\nSquad members:\n{members_text}\n\nGenerate one thought per member."
 
@@ -572,7 +606,21 @@ async def receive_sitrep(request: Request):
     # Phase 3: TTS speak
     if response.voice_reply:
         tts_handler.speak(response.voice_reply, member_index=0)
-    logger.info(f"LLM order: action={response.action}, offset={response.target_offset}")
+    # F5: Log battle events
+    if response.action != "HOLD":
+        add_battle_event("ORDER", f"LLM ordered {response.action}")
+    if sitrep.enemy_count > 0:
+        add_battle_event("CONTACT", f"{sitrep.enemy_count} hostiles detected")
+    # F6: Track leader state changes
+    leader_state = "alive"
+    if sitrep.model_extra:
+        leader_state = sitrep.model_extra.get("leader_state", "alive")
+    if leader_state == "downed" and app_state.get("last_leader_state") != "downed":
+        add_battle_event("CRITICAL", "Squad leader is DOWN! Medic rescue needed!")
+    elif leader_state == "alive" and app_state.get("last_leader_state") == "downed":
+        add_battle_event("RECOVERY", "Squad leader is back on feet!")
+    app_state["last_leader_state"] = leader_state
+    logger.info(f"LLM order: action={response.action}, offset={response.target_offset}, leader={leader_state}")
     return response
 
 # =======================================================================

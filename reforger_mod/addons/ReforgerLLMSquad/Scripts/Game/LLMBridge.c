@@ -108,6 +108,7 @@ class LLMBridge
 	float m_fOrdersTimer;
 	float m_fThoughtTimer;    // F2.7: AI brain thoughts
 	string m_sLastAction;
+	string m_sLastLeaderState; // F6: track leader state for change detection
 
 	// Waypoint prefabs
 	static const string WP_MOVE = "{750A8D1695BD6998}Prefabs/AI/Waypoints/AIWaypoint_Move.et";
@@ -278,6 +279,28 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
+	// F6: Detect player downed/dead state
+	string GetPlayerLifeState()
+	{
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (!pm) return "alive";
+
+		for (int pid = 1; pid <= 32; pid++)
+		{
+			IEntity playerEnt = pm.GetPlayerControlledEntity(pid);
+			if (!playerEnt) continue;
+
+			// TODO: Reforger build 190965 does not expose ChimeraCharacterController
+			// or SCR_CharacterController as usable script types for Cast/FindComponent.
+			// Future: find the correct API (possibly via DamageManagerComponent or
+			// entity health checks) to detect downed/incapacitated state.
+			// For now, if the player entity exists, they are alive.
+			return "alive";
+		}
+		return "alive";
+	}
+
+	//------------------------------------------------------------------------------------------------
 	void SendSITREP()
 	{
 		if (!m_bLLMReady) return;
@@ -315,7 +338,17 @@ class LLMBridge
 
 		// F3.5: Environment description
 		string sEnv = ScanEnvironment(squadPos);
-		sJSON += ",\"environment\":\"" + sEnv + "\"}";
+
+		// F6: Leader life state (alive/downed/dead)
+		string sLeaderState = GetPlayerLifeState();
+		if (sLeaderState != m_sLastLeaderState)
+		{
+			Print("[LLMBridge] Leader state changed: " + m_sLastLeaderState + " -> " + sLeaderState);
+			m_sLastLeaderState = sLeaderState;
+		}
+
+		sJSON += ",\"environment\":\"" + sEnv + "\",\"leader_state\":\"" + sLeaderState + "\"}";
+
 
 		EnsureRest();
 		LLMBridgeRestCallback cb = CreateCallback("/sitrep");
@@ -568,6 +601,14 @@ class LLMBridge
 				Print("[LLMBridge] " + action + " but no offset, holding");
 				SetAllOrders("HOLD");
 			}
+		}
+		else if (action == "MEDIC")
+		{
+			// F6: Emergency rescue — move squad to downed leader
+			SetAllOrders("MEDIC");
+			vector leaderPos = GetSquadPosition();
+			Print("[LLMBridge] MEDIC: squad moving to rescue leader at " + leaderPos);
+			ExecuteWaypoint("FOLLOW", leaderPos);
 		}
 		else
 		{
