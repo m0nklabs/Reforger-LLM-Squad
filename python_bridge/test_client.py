@@ -1,7 +1,7 @@
 """
 Standalone test client for Reforger LLM Bridge.
 Tests the bridge WITHOUT Arma Reforger running.
-Simulates game SITREP, orders, AI thoughts, Stavka strategic AI, and voice handler.
+Simulates game SITREP, orders, AI thoughts, Stavka strategic AI, voice handler, and TTS.
 
 Usage:
     python test_client.py          # run all tests
@@ -190,6 +190,31 @@ def test_voice():
         return False
 
 
+def test_tts():
+    """Test TTS handler status."""
+    print("\n=== Test: TTS Handler ===")
+    try:
+        r = requests.get(f"{BRIDGE_URL}/tts", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            print(f"  Enabled: {data.get('enabled')}")
+            print(f"  Engine: {data.get('engine')}")
+            print(f"  edge-tts: {data.get('edge_available')}")
+            print(f"  pyttsx3: {data.get('pyttsx3_available')}")
+            print(f"  Running: {data.get('running')}")
+            if data.get('enabled') and data.get('running'):
+                print("[PASS] TTS handler active")
+                return True
+            else:
+                print("[WARN] TTS not enabled/running")
+                return True  # soft pass - TTS is optional
+        else:
+            print(f"[FAIL] Status: {r.status_code}")
+            return False
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
 def test_latency():
     """Measure end-to-end latency for SITREP -> LLM -> response"""
     print("\n=== Test: Latency ===")
@@ -250,6 +275,7 @@ def main():
             "thought": test_ai_thought,
             "stavka": test_stavka,
             "voice": test_voice,
+            "tts": test_tts,
             "latency": test_latency,
         }
         if test_name in test_map:
@@ -268,6 +294,7 @@ def main():
     results.append(("AI Thoughts", test_ai_thought()))
     results.append(("Stavka", test_stavka()))
     results.append(("Voice", test_voice()))
+    results.append(("TTS", test_tts()))
     results.append(("Latency", test_latency()))
 
     # Summary

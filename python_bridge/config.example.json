@@ -12,7 +12,11 @@
   },
   "game": {
     "sitrep_interval_seconds": 10,
-    "squad_names": ["ALPHA", "BRAVO", "CHARLIE"],
+    "squad_names": [
+      "ALPHA",
+      "BRAVO",
+      "CHARLIE"
+    ],
     "fallback_action": "HOLD"
   },
   "voice": {
@@ -25,5 +29,11 @@
   "logging": {
     "level": "INFO",
     "file": "bridge.log"
+  },
+  "tts": {
+    "enabled": true,
+    "engine": "auto",
+    "rate": 150,
+    "volume": 0.9
   }
 }

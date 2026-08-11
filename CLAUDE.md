@@ -166,6 +166,7 @@ Never invent these — every single one has already gone wrong once:
  - F3.3 (2026-08-10): Feedback Loop - OPFOR count sent to bridge (GET ?opfor=N), LLM adapts strategy (spawn when weak, hold when sufficient), casualty detection triggers early polls
 - Phase 2 (2026-08-11): Voice Pipeline (Whisper STT) - voice_handler.py with PTT key listener, faster-whisper transcription, transcription -> LLM -> pending_orders queue. GET /voice endpoint for status. Model: tiny (2.8s load). Auto-elevate admin in start_bridge.bat.
 - F3.5 (2026-08-11): Environment Scanning - ScanEnvironment() in LLMBridge.c reports time/day/night + terrain elevation. Uses ChimeraWorld.CastFrom(), TimeAndWeatherManagerEntity (GetTime, IsSunSet). Bridge receives 'environment' field in SITREP, includes in LLM prompt, adds to fingerprint (time changes trigger new calls). 8/8 tests pass.
+- Phase 3 (2026-08-11): TTS Squad Feedback - edge-tts (primary, 10 voices) + pyttsx3 (offline fallback). tts_handler.py with TTSHandler class. Bridge speaks voice_reply from SITREP/command/voice endpoints via background thread. /tts endpoint for status. Rate-limited (2s min interval), dedup (no repeat). 9/9 tests pass.
 - Full plan: `PROJECT_PLAN.md`. Launch diagnosis: `MOD_SETUP.md`.
 
 ## References

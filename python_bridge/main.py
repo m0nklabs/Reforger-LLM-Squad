@@ -87,6 +87,10 @@ voice_handler = VoiceHandler(
     on_transcription=None  # set in lifespan after call_llm is available
 )
 
+# Phase 3: TTS squad feedback (edge-tts + pyttsx3 fallback)
+from tts_handler import TTSHandler
+tts_handler = TTSHandler(CONFIG.get("tts", {}))
+
 # --- Pydantic Models ---
 
 class SitRepMember(BaseModel):
@@ -456,6 +460,9 @@ async def lifespan(app: FastAPI):
         logger.info(f"[Voice] Transcription: \"{text}\" → forwarding to LLM")
         situation = get_situation_text(app_state.get("last_sitrep")) if app_state.get("last_sitrep") else "No squad data."
         response = call_llm(command=text, situation=situation)
+        # Phase 3: TTS speak
+        if response.voice_reply:
+            tts_handler.speak(response.voice_reply, member_index=0)
         # Queue the LLM response as a pending order for the game to pick up
         order = {
             "cmd": "move" if response.action in ("MOVE", "ENGAGE", "FLANK") else response.action.lower(),
@@ -471,9 +478,13 @@ async def lifespan(app: FastAPI):
     voice_handler._on_transcription = on_voice_transcription
     voice_handler.start()
 
+    # Phase 3: Start TTS handler
+    tts_handler.start()
+
     yield
     logger.info("=== Reforger LLM Bridge Shutting Down ===")
     voice_handler.stop()
+    tts_handler.stop()
 
 app = FastAPI(title="Reforger LLM Squad Control", version="2.0.0", lifespan=lifespan)
 
@@ -491,8 +502,16 @@ async def health_check():
         "sitreps_skipped_llm": app_state.get("sitrep_skipped", 0),
         "players_active": (time.time() - app_state.get("last_sitrep_time", 0)) < 90,
         "secs_since_last_sitrep": round(time.time() - app_state.get("last_sitrep_time", 0), 1),
-        "proxy": CONFIG["llm"]["base_url"], "model": CONFIG["llm"]["model"]
+        "proxy": CONFIG["llm"]["base_url"], "model": CONFIG["llm"]["model"],
+        "tts_enabled": tts_handler.enabled
     }
+
+# =======================================================================
+# GET /tts - Phase 3: TTS handler status
+# =======================================================================
+@app.get("/tts")
+async def tts_status():
+    return tts_handler.get_status()
 
 # =======================================================================
 # /orders — LIVE command queue (F2.x: debug without game restart)
@@ -548,6 +567,9 @@ async def receive_sitrep(request: Request):
     situation = get_situation_text(sitrep)
     response = call_llm(command=f"SITREP review: {len(sitrep.squad)} squad members deployed.", situation=situation)
     app_state["last_llm_response"] = response
+    # Phase 3: TTS speak
+    if response.voice_reply:
+        tts_handler.speak(response.voice_reply, member_index=0)
     logger.info(f"LLM order: action={response.action}, offset={response.target_offset}")
     return response
 
@@ -567,6 +589,9 @@ async def receive_command(request: Request):
     logger.info(f"Command #{app_state['command_count']}: '{cmd.command}'")
     situation = get_situation_text(app_state["last_sitrep"]) if app_state["last_sitrep"] else "No SITREP data."
     response = call_llm(command=cmd.command, situation=situation)
+    # Phase 3: TTS speak
+    if response.voice_reply:
+        tts_handler.speak(response.voice_reply, member_index=0)
     logger.info(f"LLM order: action={response.action}")
     return response
 
