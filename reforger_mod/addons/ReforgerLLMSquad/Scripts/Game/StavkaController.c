@@ -268,6 +268,25 @@ class StavkaController
 			if (offset[2] < -maxOffset) offset[2] = -maxOffset;
 		}
 
+
+		// Enforce minimum spawn distance: OPFOR must not spawn within 100m of BLUFOR
+		float offsetDist = Math.Sqrt(offset[0] * offset[0] + offset[2] * offset[2]);
+		if (offsetDist < 100.0)
+		{
+			Print("[Stavka] WARNING: offset " + offset + " too close (" + offsetDist + "m), pushing OPFOR to 150m");
+			if (offsetDist < 1.0)
+			{
+				float angle = 1.5708; // fixed angle (NE)
+				offset[0] = Math.Cos(angle) * 150.0;
+				offset[2] = Math.Sin(angle) * 150.0;
+			}
+			else
+			{
+				float scale = 150.0 / offsetDist;
+				offset[0] = offset[0] * scale;
+				offset[2] = offset[2] * scale;
+			}
+		}
 		vector spawnPos = bluforPos + offset;
 		spawnPos[1] = bluforPos[1];
 

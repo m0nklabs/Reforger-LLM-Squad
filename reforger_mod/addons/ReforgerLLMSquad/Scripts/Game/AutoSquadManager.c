@@ -242,6 +242,18 @@ modded class SCR_AIWorld
 			if (!aiCtrl) { Print("[AutoSquad] LiveManual: no AIControlComponent on #" + i); continue; }
 
 			// Add to SLAVE group FIRST (NOT master group!) — this triggers RPL broadcast
+		// Set faction on each AI soldier to match master group faction
+		FactionAffiliationComponent mFac = FactionAffiliationComponent.Cast(grp.FindComponent(FactionAffiliationComponent));
+		FactionAffiliationComponent aiFac = FactionAffiliationComponent.Cast(aiEnt.FindComponent(FactionAffiliationComponent));
+		if (mFac && aiFac)
+		{
+			Faction grpFaction = mFac.GetAffiliatedFaction();
+			if (grpFaction)
+			{
+				aiFac.SetAffiliatedFaction(grpFaction);
+			}
+		}
+
 			slaveGroup.AddAgentFromControlledEntity(aiEnt);
 
 			// Activate AI AFTER group assignment — delay to let group components initialize
@@ -440,6 +452,24 @@ modded class SCR_AIWorld
 		// Don't delete when empty (vanilla pattern)
 		slaveGroup.SetDeleteWhenEmpty(false);
 		slaveGroup.ActivateAI();
+
+		// CRITICAL: Set slave group faction to match master group
+		// Without this, AI soldiers may engage the player as hostile
+		FactionAffiliationComponent masterFac = FactionAffiliationComponent.Cast(masterGroup.FindComponent(FactionAffiliationComponent));
+		FactionAffiliationComponent slaveFac = FactionAffiliationComponent.Cast(slaveGroup.FindComponent(FactionAffiliationComponent));
+		if (masterFac && slaveFac)
+		{
+			Faction masterFaction = masterFac.GetAffiliatedFaction();
+			if (masterFaction)
+			{
+				slaveFac.SetAffiliatedFaction(masterFaction);
+				Print("[AutoSquad] Slave group faction set to: " + masterFaction.GetFactionKey());
+			}
+		}
+		else
+		{
+			Print("[AutoSquad] WARNING: could not set slave group faction - friendly fire risk!");
+		}
 
 		// Link slave to master via GroupsManager
 		SCR_GroupsManagerComponent groupsMgr = SCR_GroupsManagerComponent.GetInstance();
