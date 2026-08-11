@@ -141,7 +141,7 @@ ISSUE_ORDER_FUNCTION = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["ENGAGE", "MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD"]},
+            "action": {"type": "string", "enum": ["ENGAGE", "MOVE", "SUPPRESS", "FLANK", "RETREAT", "HOLD", "MOUNT", "DISMOUNT"]},
             "target_offset": {
                 "type": "array",
                 "items": {"type": "number"},
@@ -164,7 +164,9 @@ Respond with valid JSON only. Direction guide for target_offset [dx, dz]:
 - North = negative dz, e.g. [0, -100]
 - South = positive dz, e.g. [0, 100]
 Keep offsets 50-300m. No enemies nearby = HOLD with [0, 0].
-If enemies are detected, ENGAGE with offset toward nearest enemy, or FLANK to approach from the side, or RETREAT if outnumbered."""
+If enemies are detected, ENGAGE with offset toward nearest enemy, or FLANK to approach from the side, or RETREAT if outnumbered.
+MOUNT = order squad to enter nearest vehicle (for fast travel or retreat). DISMOUNT = exit vehicle.
+Use MOUNT when squad needs to cover large distances quickly or retreat from overwhelming force."""
 
 app_state = {
     "last_sitrep": None,
@@ -465,7 +467,7 @@ async def lifespan(app: FastAPI):
             tts_handler.speak(response.voice_reply, member_index=0)
         # Queue the LLM response as a pending order for the game to pick up
         order = {
-            "cmd": "move" if response.action in ("MOVE", "ENGAGE", "FLANK") else response.action.lower(),
+            "cmd": "mount" if response.action == "MOUNT" else ("dismount" if response.action == "DISMOUNT" else ("move" if response.action in ("MOVE", "ENGAGE", "FLANK") else response.action.lower())),
             "action": response.action,
             "offset": response.target_offset,
             "voice_reply": response.voice_reply,

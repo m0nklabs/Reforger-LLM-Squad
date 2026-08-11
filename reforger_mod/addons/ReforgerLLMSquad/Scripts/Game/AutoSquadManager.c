@@ -7,6 +7,14 @@
 // Anti-hallucination: no invented APIs, no modclass, no nested classes.
 
 //------------------------------------------------------------------------------------------------
+// F4: Module-level entity query callback for vehicle search
+ref array<IEntity> g_aQueriedEntities = {};
+bool QueryEntityCallback(IEntity ent)
+{
+	if (ent) g_aQueriedEntities.Insert(ent);
+	return true;
+}
+
 // modded SCR_AIWorld: track AI agents + store player group for LLMBridge
 modded class SCR_AIWorld
 {
@@ -445,6 +453,204 @@ modded class SCR_AIWorld
 	}
 
 	//------------------------------------------------------------------------------------------------
+	// F4: Mount nearest vehicle - put squad AI in driver + passenger seats
+	static void MountNearestVehicle()
+	{
+		SCR_AIGroup grp = s_PlayerGroup;
+		if (!grp)
+		{
+			Print("[AutoSquad] Mount: no group, trying dynamic lookup...");
+			PlayerManager pm = GetGame().GetPlayerManager();
+			if (!pm) { Print("[AutoSquad] Mount: no PlayerManager"); return; }
+			for (int pid = 1; pid <= 32; pid++)
+			{
+				IEntity pEnt = pm.GetPlayerControlledEntity(pid);
+				if (!pEnt) continue;
+				AIControlComponent aiCtrl = AIControlComponent.Cast(pEnt.FindComponent(AIControlComponent));
+				if (aiCtrl)
+				{
+					AIAgent pAgent = aiCtrl.GetControlAIAgent();
+					if (pAgent)
+					{
+						AIGroup rawGrp = pAgent.GetParentGroup();
+						if (rawGrp) { grp = SCR_AIGroup.Cast(rawGrp); s_PlayerGroup = grp; break; }
+					}
+				}
+			}
+			if (!grp) { Print("[AutoSquad] Mount: no group found"); return; }
+		}
+
+		// Get squad position
+		vector squadPos = GetSquadCenterPosition(grp);
+		Print("[AutoSquad] Mount: searching for vehicle near " + squadPos);
+
+		// Search for vehicles in 60m radius using callback
+		g_aQueriedEntities.Clear();
+		GetGame().GetWorld().QueryEntitiesBySphere(squadPos, 60, QueryEntityCallback);
+
+		IEntity nearestVehicle = null;
+		float nearestDist = 9999;
+
+		for (int e = 0; e < g_aQueriedEntities.Count(); e++)
+		{
+			IEntity ent = g_aQueriedEntities.Get(e);
+			if (!ent) continue;
+
+			// Check if it's a vehicle
+			Vehicle vehicle = Vehicle.Cast(ent);
+			if (!vehicle) continue;
+
+			// Skip destroyed vehicles
+			SCR_DamageManagerComponent dmgMgr = SCR_DamageManagerComponent.Cast(ent.FindComponent(SCR_DamageManagerComponent));
+			if (dmgMgr && dmgMgr.IsDestroyed()) continue;
+
+			// Check distance
+			vector entPos = ent.GetOrigin();
+			float dist = vector.Distance(squadPos, entPos);
+			if (dist < nearestDist)
+			{
+				// Check if vehicle has free compartments
+				SCR_BaseCompartmentManagerComponent compMgr = SCR_BaseCompartmentManagerComponent.Cast(
+					ent.FindComponent(SCR_BaseCompartmentManagerComponent));
+				if (compMgr)
+				{
+					nearestDist = dist;
+					nearestVehicle = ent;
+				}
+			}
+		}
+
+		if (!nearestVehicle)
+		{
+			Print("[AutoSquad] Mount: no vehicle found within 60m");
+			return;
+		}
+
+		Print("[AutoSquad] Mount: found vehicle " + nearestVehicle + " at " + nearestDist + "m");
+
+		// Get AI agents from slave group
+		SCR_AIGroup slaveGroup = grp.GetSlave();
+		if (!slaveGroup) { Print("[AutoSquad] Mount: no slave group"); return; }
+
+		array<AIAgent> agents = {};
+		slaveGroup.GetAgents(agents);
+
+		if (agents.Count() == 0)
+		{
+			Print("[AutoSquad] Mount: no AI agents in slave group");
+			return;
+		}
+
+		// First AI = driver (PILOT), rest = CARGO (passengers)
+		int mounted = 0;
+		for (int i = 0; i < agents.Count(); i++)
+		{
+			IEntity aiEnt = agents[i].GetControlledEntity();
+			if (!aiEnt) continue;
+
+			SCR_CompartmentAccessComponent compAccess = SCR_CompartmentAccessComponent.Cast(
+				aiEnt.FindComponent(SCR_CompartmentAccessComponent));
+			if (!compAccess) continue;
+
+			// Skip if already in vehicle
+			if (compAccess.IsInCompartment()) continue;
+
+			bool success = false;
+			if (i == 0)
+			{
+				// Driver seat
+				success = compAccess.MoveInVehicle(nearestVehicle, ECompartmentType.PILOT);
+				Print("[AutoSquad] Mount: AI #" + i + " -> PILOT seat: " + success);
+			}
+			else
+			{
+				// Passenger seat
+				success = compAccess.MoveInVehicle(nearestVehicle, ECompartmentType.CARGO);
+				Print("[AutoSquad] Mount: AI #" + i + " -> CARGO seat: " + success);
+			}
+
+			if (success) mounted++;
+		}
+
+		Print("[AutoSquad] Mount: " + mounted + " AI in vehicle");
+	}
+
+	// F4: Dismount - get all AI out of vehicle
+	static void DismountVehicle()
+	{
+		SCR_AIGroup grp = s_PlayerGroup;
+		if (!grp) { Print("[AutoSquad] Dismount: no group"); return; }
+
+		SCR_AIGroup slaveGroup = grp.GetSlave();
+		if (!slaveGroup) { Print("[AutoSquad] Dismount: no slave group"); return; }
+
+		array<AIAgent> agents = {};
+		slaveGroup.GetAgents(agents);
+
+		int dismounted = 0;
+		for (int i = 0; i < agents.Count(); i++)
+		{
+			IEntity aiEnt = agents[i].GetControlledEntity();
+			if (!aiEnt) continue;
+
+			SCR_CompartmentAccessComponent compAccess = SCR_CompartmentAccessComponent.Cast(
+				aiEnt.FindComponent(SCR_CompartmentAccessComponent));
+			if (!compAccess) continue;
+
+			if (compAccess.IsInCompartment())
+			{
+				compAccess.AskOwnerToGetOutFromVehicle(0, 0, 0, false, false);
+				dismounted++;
+				Print("[AutoSquad] Dismount: AI #" + i + " out of vehicle");
+			}
+		}
+
+		Print("[AutoSquad] Dismount: " + dismounted + " AI out of vehicle");
+	}
+
+	// Helper: get center position of squad (average of all AI positions)
+	static vector GetSquadCenterPosition(SCR_AIGroup grp)
+	{
+		vector center = "0 0 0";
+		int count = 0;
+
+		// Try slave group agents
+		SCR_AIGroup slaveGroup = grp.GetSlave();
+		if (slaveGroup)
+		{
+			array<AIAgent> agents = {};
+			slaveGroup.GetAgents(agents);
+			foreach (AIAgent agent : agents)
+			{
+				IEntity ent = agent.GetControlledEntity();
+				if (ent) { center += ent.GetOrigin(); count++; }
+			}
+		}
+
+		// Try master group agents
+		array<AIAgent> masterAgents = {};
+		grp.GetAgents(masterAgents);
+		foreach (AIAgent agent : masterAgents)
+		{
+			IEntity ent = agent.GetControlledEntity();
+			if (ent) { center += ent.GetOrigin(); count++; }
+		}
+
+		// Try player position
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (count == 0 && pm)
+		{
+			for (int pid = 1; pid <= 32; pid++)
+			{
+				IEntity pEnt = pm.GetPlayerControlledEntity(pid);
+				if (pEnt) { center = pEnt.GetOrigin(); count = 1; break; }
+			}
+		}
+
+		if (count > 0) center = center / count;
+		return center;
+	}
+
 	// F2.x: Live despawn - remove all AI agents from group
 	static void LiveDespawnSquad()
 	{

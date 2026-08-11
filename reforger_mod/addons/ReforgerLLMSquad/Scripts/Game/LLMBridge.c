@@ -469,6 +469,16 @@ class LLMBridge
 			Print("[LLMBridge] FOLLOW: creating follow waypoint at " + leaderPos);
 			ExecuteWaypoint("FOLLOW", leaderPos);
 		}
+		else if (cmd == "mount")
+		{
+			Print("[LLMBridge] MOUNT: ordering squad to enter nearest vehicle");
+			SCR_AIWorld.MountNearestVehicle();
+		}
+		else if (cmd == "dismount")
+		{
+			Print("[LLMBridge] DISMOUNT: ordering squad to exit vehicle");
+			SCR_AIWorld.DismountVehicle();
+		}
 		else
 		{
 			Print("[LLMBridge] Unknown order: " + cmd);
