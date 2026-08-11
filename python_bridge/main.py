@@ -100,6 +100,7 @@ class SitRepRequest(BaseModel):
     squad: List[SitRepMember] = []
     enemies: List[dict] = []  # F3.4: enemy positions (dx, dz, dist relative to squad)
     enemy_count: int = 0
+    environment: str = ""  # F3.5: terrain + time description
     model_config = ConfigDict(extra="allow")
 
 class CommandRequest(BaseModel):
@@ -217,6 +218,11 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
             lines.append(f"  Enemy {dist:.0f}m {compass} (offset dx={dx:.0f}, dz={dz:.0f})")
     else:
         lines.append("No enemy contacts reported.")
+
+    # F3.5: Environment description
+    if sitrep.environment:
+        lines.append(f"Environment: {sitrep.environment}")
+
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
 
 def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
@@ -233,6 +239,8 @@ def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
     parts.append(f"enemies={sitrep.enemy_count}")
     for e in sitrep.enemies[:5]:
         parts.append(f"e{int(e.get('dx',0)//50)}:{int(e.get('dz',0)//50)}")
+    # F3.5: Include environment (time changes trigger new calls)
+    parts.append(f"env={sitrep.environment[:20] if sitrep.environment else 'none'}")
     return "|".join(parts)
 
 def call_llm(command: str, situation: str) -> SitRepResponse:

@@ -311,7 +311,11 @@ class LLMBridge
 			}
 		}
 		sEnemies += "]";
-		sJSON += ",\"enemies\":" + sEnemies + ",\"enemy_count\":" + enemyCount + "}";
+		sJSON += ",\"enemies\":" + sEnemies + ",\"enemy_count\":" + enemyCount;
+
+		// F3.5: Environment description
+		string sEnv = ScanEnvironment(squadPos);
+		sJSON += ",\"environment\":\"" + sEnv + "\"}";
 
 		EnsureRest();
 		LLMBridgeRestCallback cb = CreateCallback("/sitrep");
@@ -559,6 +563,41 @@ class LLMBridge
 		{
 			SetAllOrders("HOLD");
 		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// F3.5: Scan environment - terrain, time of day
+	string ScanEnvironment(vector squadPos)
+	{
+		// Get ChimeraWorld using CastFrom (NOT Cast - verified via Doxygen)
+		ChimeraWorld world = ChimeraWorld.CastFrom(GetGame().GetWorld());
+		if (!world) return "unknown terrain";
+		
+		TimeAndWeatherManagerEntity weatherMgr = world.GetTimeAndWeatherManager();
+		if (!weatherMgr) return "unknown terrain";
+		
+		// Time info (verified APIs: GetTime() -> TimeContainer, IsSunSet() -> bool)
+		TimeContainer time = weatherMgr.GetTime();
+		int hours = time.m_iHours;
+		int minutes = time.m_iMinutes;
+		bool isNight = weatherMgr.IsSunSet();
+		
+		// Build time string (Enforce auto-converts int in string concat)
+		string timeStr = "" + hours + ":";
+		if (minutes < 10)
+			timeStr += "0" + minutes;
+		else
+			timeStr += "" + minutes;
+		
+		string dayNight = "day";
+		if (isNight) dayNight = "night";
+		
+		// Terrain description from elevation
+		float baseHeight = squadPos[1];
+		string terrain = "terrain at " + baseHeight + "m elevation";
+		
+		
+		return timeStr + " " + dayNight + " - " + terrain;
 	}
 
 	//------------------------------------------------------------------------------------------------
