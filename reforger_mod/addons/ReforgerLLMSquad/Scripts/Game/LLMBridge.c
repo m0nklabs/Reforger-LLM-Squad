@@ -419,7 +419,7 @@ class LLMBridge
 		else if (cmd == "status")
 		{
 			vector pos = GetSquadPosition();
-			SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+			SCR_AIGroup grp = FindPlayerGroup();
 			int agentCount = 0;
 			int memberCount = 0;
 			int wpCount = 0;
@@ -601,9 +601,70 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
+	// Dynamic group lookup: if s_PlayerGroup is null, try to find it from player
+	SCR_AIGroup FindPlayerGroup()
+	{
+		// First try the stored reference
+		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+		if (grp) return grp;
+
+		// Not stored yet - try to find it from the player entity
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (!pm) return null;
+
+		// Check players 1-32
+		for (int pid = 1; pid <= 32; pid++)
+		{
+			IEntity playerEnt = pm.GetPlayerControlledEntity(pid);
+			if (!playerEnt) continue;
+
+			// Method 1: via SCR_PlayerControllerGroupComponent
+			SCR_PlayerControllerGroupComponent groupComp = SCR_PlayerControllerGroupComponent.Cast(
+				playerEnt.FindComponent(SCR_PlayerControllerGroupComponent));
+			if (groupComp)
+			{
+				AIGroup rawGroup = groupComp.GetPlayersGroup();
+				if (rawGroup)
+				{
+					SCR_AIGroup found = SCR_AIGroup.Cast(rawGroup);
+					if (found)
+					{
+						Print("[LLMBridge] Found player group dynamically: " + found + " (player " + pid + ")");
+						SCR_AIWorld.SetPlayerGroup(found);
+						return found;
+					}
+				}
+			}
+
+			// Method 2: via AIControlComponent on player entity
+			AIControlComponent aiCtrl = AIControlComponent.Cast(playerEnt.FindComponent(AIControlComponent));
+			if (aiCtrl)
+			{
+				AIAgent playerAgent = aiCtrl.GetControlAIAgent();
+				if (playerAgent)
+				{
+					AIGroup rawGroup = playerAgent.GetParentGroup();
+					if (rawGroup)
+					{
+						SCR_AIGroup found = SCR_AIGroup.Cast(rawGroup);
+						if (found)
+						{
+							Print("[LLMBridge] Found player group via AIControl: " + found + " (player " + pid + ")");
+							SCR_AIWorld.SetPlayerGroup(found);
+							return found;
+						}
+					}
+				}
+			}
+		}
+
+		return null;
+	}
+
+	//------------------------------------------------------------------------------------------------
 	vector GetSquadPosition()
 	{
-		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+		SCR_AIGroup grp = FindPlayerGroup();
 		if (grp)
 		{
 			array<AIAgent> agents = {};
@@ -626,8 +687,8 @@ class LLMBridge
 	//------------------------------------------------------------------------------------------------
 	void ExecuteWaypoint(string sAction, vector vPos)
 	{
-		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
-		if (!grp) { Print("[LLMBridge] No player group"); return; }
+		SCR_AIGroup grp = FindPlayerGroup();
+		if (!grp) { Print("[LLMBridge] No player group (trying dynamic lookup failed)"); return; }
 		if (!Replication.IsServer()) return;
 
 		string prefabName = WP_MOVE;
@@ -659,7 +720,7 @@ class LLMBridge
 
 	void ClearSquadWaypoints()
 	{
-		SCR_AIGroup grp = SCR_AIGroup.Cast(SCR_AIWorld.GetPlayerGroup());
+		SCR_AIGroup grp = FindPlayerGroup();
 		if (!grp) return;
 		array<AIWaypoint> existing = {};
 		grp.GetWaypoints(existing);

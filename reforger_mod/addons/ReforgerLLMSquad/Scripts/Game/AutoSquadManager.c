@@ -473,6 +473,7 @@ modded class SCR_AIWorld
 modded class SCR_PlayerController
 {
 	protected bool m_bAutoSquadDone = false;
+	protected int m_iAutoSquadRetries = 0;
 
 	//------------------------------------------------------------------------------------------------
 	override void OnControlledEntityChanged(IEntity from, IEntity to)
@@ -494,6 +495,7 @@ modded class SCR_PlayerController
 		}
 
 		m_bAutoSquadDone = true;
+		m_iAutoSquadRetries = 0;
 		Print("[AutoSquad] Player " + playerID + " entity changed, scheduling squad spawn (5s delay)");
 		GetGame().GetCallqueue().CallLater(DeferredAutoSquad, 5000, false, playerID);
 	}
@@ -713,7 +715,16 @@ modded class SCR_PlayerController
 		}
 		else
 		{
-			Print("[AutoSquad] No suitable group found. Player will play solo.");
+			m_iAutoSquadRetries++;
+		if (m_iAutoSquadRetries <= 18)
+		{
+			Print("[AutoSquad] No group yet, retry " + m_iAutoSquadRetries + "/18 in 10s (player may not have joined group)");
+			GetGame().GetCallqueue().CallLater(DeferredAutoSquad, 10000, false, playerID);
+		}
+		else
+		{
+			Print("[AutoSquad] No group found after 18 retries (3min). Use /orders cmd=spawn to manually spawn later.");
+		}
 		}
 	}
 };
