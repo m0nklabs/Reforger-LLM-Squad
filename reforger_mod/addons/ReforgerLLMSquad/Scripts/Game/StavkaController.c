@@ -318,7 +318,41 @@ class StavkaController
 		}
 
 		// USSR Rifleman — confirmed prefab from SCR_DebugEditorComponent.c
+		// Dynamic OPFOR: use the OPPOSING faction of the player
+		Faction opforFaction = null;
+		string opforFactionKey = "USSR";
 		ResourceName prefabPath = "{DCB41B3746FDD1BE}Prefabs/Characters/OPFOR/USSR_Army/Character_USSR_Rifleman.et";
+
+		// Check player faction and pick opposing side
+		PlayerManager sPm = GetGame().GetPlayerManager();
+		if (sPm)
+		{
+			for (int pid = 1; pid <= 32; pid++)
+			{
+				IEntity pEnt = sPm.GetPlayerControlledEntity(pid);
+				if (!pEnt) continue;
+				SCR_FactionManager sFm = SCR_FactionManager.Cast(GetGame().GetFactionManager());
+				if (sFm)
+				{
+					Faction pFac = sFm.GetPlayerFaction(pid);
+					if (pFac)
+					{
+						string pKey = pFac.GetFactionKey();
+						if (pKey == "USSR")
+						{
+							opforFactionKey = "US";
+							prefabPath = "{5B1996C05B1E51A4}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_AR.et";
+							Print("[Stavka] Player is USSR - OPFOR will be US faction");
+						}
+						else
+						{
+							Print("[Stavka] Player is " + pKey + " - OPFOR will be USSR faction");
+						}
+						break;
+					}
+				}
+			}
+		}
 		Resource res = Resource.Load(prefabPath);
 		if (!res || !res.IsValid())
 		{
@@ -330,7 +364,7 @@ class StavkaController
 		Faction ussrFaction = null;
 		SCR_FactionManager fm = SCR_FactionManager.Cast(GetGame().GetFactionManager());
 		if (fm)
-			ussrFaction = fm.GetFactionByKey("USSR");
+			ussrFaction = fm.GetFactionByKey(opforFactionKey);
 
 		// Create an AI group for the OPFOR soldiers
 		// Use the slave group prefab from SCR_CommandingManagerComponent
@@ -391,7 +425,7 @@ class StavkaController
 				continue;
 			}
 
-			// Set faction to USSR
+			// Set faction to OPFOR (dynamically chosen)
 			FactionAffiliationComponent facComp = FactionAffiliationComponent.Cast(aiEnt.FindComponent(FactionAffiliationComponent));
 			if (facComp)
 			{

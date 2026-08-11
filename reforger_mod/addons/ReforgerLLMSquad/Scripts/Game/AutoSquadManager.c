@@ -186,10 +186,27 @@ modded class SCR_AIWorld
 
 		Print("[AutoSquad] LiveManual: spawning 5 AI near " + playerPos);
 
-		// Confirmed US soldier prefabs from vanilla SDK source (SCR_AutotestCommonFixture.c, SCR_CareerProfileHUD.c)
+		// Dynamic prefab selection based on player faction
+		SCR_FactionManager facMgr = SCR_FactionManager.Cast(GetGame().GetFactionManager());
+		Faction playerFac = null;
+		if (facMgr) playerFac = facMgr.GetPlayerFaction(playerID);
+		string facKey = "US";
+		if (playerFac) facKey = playerFac.GetFactionKey();
+
 		array<ResourceName> prefabPaths = {};
-		prefabPaths.Insert("{5B1996C05B1E51A4}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_AR.et");
-		prefabPaths.Insert("{2F912ED6E399FF47}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_Unarmed.et");
+		if (facKey == "USSR")
+		{
+			// USSR soldier prefabs
+			prefabPaths.Insert("{DCB41B3746FDD1BE}Prefabs/Characters/OPFOR/USSR_Army/Character_USSR_Rifleman.et");
+			Print("[AutoSquad] LiveManual: using USSR faction prefabs");
+		}
+		else
+		{
+			// US Army soldier prefabs (default)
+			prefabPaths.Insert("{5B1996C05B1E51A4}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_AR.et");
+			prefabPaths.Insert("{2F912ED6E399FF47}Prefabs/Characters/Factions/BLUFOR/US_Army/Character_US_Unarmed.et");
+			Print("[AutoSquad] LiveManual: using US faction prefabs");
+		}
 
 		ResourceName usedPrefab = "";
 		foreach (ResourceName pPath : prefabPaths)
