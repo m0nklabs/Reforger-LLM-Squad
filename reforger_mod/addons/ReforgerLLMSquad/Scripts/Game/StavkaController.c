@@ -100,6 +100,9 @@ class StavkaController
 	//------------------------------------------------------------------------------------------------
 	void PollStavka()
 	{
+		// STAVKA DISABLED: vanilla campaign already has OPFOR forces.
+		// Stavka OPFOR spawning is redundant and causes enemies near player spawn.
+		return;
 		if (!m_Rest)
 		{
 			m_Rest = GetGame().GetRestApi().GetContext(m_sBridgeURL);
