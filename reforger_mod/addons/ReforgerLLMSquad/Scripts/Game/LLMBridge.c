@@ -107,6 +107,15 @@ class LLMBridge
 	float m_fHealthCheckTimer;
 	float m_fOrdersTimer;
 	float m_fThoughtTimer;    // F2.7: AI brain thoughts
+	float m_fThoughtCooldown;    // Minimum time between thought polls
+	int m_iCurrentEnemyCount;      // F2.7+: Current enemy count
+	int m_iLastEnemyCount;         // Previous enemy count (change detection)
+	string m_sCurrentLLMAction;    // Current LLM action
+	string m_sLastLLMAction;       // Previous LLM action
+	int m_iCurrentSquadCount;       // Current squad count
+	int m_iLastSquadCount;          // Previous squad count
+	string m_sCurrentLeaderEvent;  // Current leader state
+	string m_sLastLeaderEvent;      // Previous leader state
 	string m_sLastAction;
 	string m_sLastLeaderState; // F6: track leader state for change detection
 
@@ -130,6 +139,10 @@ class LLMBridge
 		m_fHealthCheckTimer = 0;
 		m_fOrdersTimer = 0;
 		m_fThoughtTimer = 0;
+		m_iLastEnemyCount = 0;
+		m_iCurrentEnemyCount = 0;
+		m_iLastSquadCount = 0;
+		m_iCurrentSquadCount = 0;
 
 		m_aSquadMembers = new array<ref LLMSquadMember>;
 		m_aSquadMembers.Insert(new LLMSquadMember("Alpha_1"));
@@ -198,6 +211,10 @@ class LLMBridge
 		m_fTime += timeslice;
 
 		m_fSITREPTimer += timeslice;
+		// Shift tracking vars: previous cycle becomes "last"
+		m_iLastEnemyCount = m_iCurrentEnemyCount;
+		m_sLastLLMAction = m_sCurrentLLMAction;
+		m_iLastSquadCount = m_iCurrentSquadCount;
 		if (m_fSITREPTimer >= m_fSITREPInterval)
 		{
 			m_fSITREPTimer = 0;
@@ -218,14 +235,46 @@ class LLMBridge
 			PollOrders();
 		}
 
-		// F2.7: AI brain thoughts — poll every 30s (offset from SITREP by 5s)
+		// F2.7+: Event-driven AI thoughts (replaces 30s timer)
+		// Thoughts triggered by events, not a schedule
 		if (m_bLLMReady)
 		{
 			m_fThoughtTimer += timeslice;
-			if (m_fThoughtTimer >= 30.0)
+			m_fThoughtCooldown += timeslice;
+
+			// Check for events that should trigger thoughts
+			string thoughtEvent = "";
+
+			// Event: enemy contact appeared
+			if (m_iLastEnemyCount == 0 && m_iCurrentEnemyCount > 0)
+				thoughtEvent = "contact";
+
+			// Event: enemies eliminated
+			else if (m_iLastEnemyCount > 0 && m_iCurrentEnemyCount == 0)
+				thoughtEvent = "clear";
+
+			// Event: LLM order changed
+			else if (!m_sLastLLMAction.IsEmpty() && m_sLastLLMAction != m_sCurrentLLMAction)
+				thoughtEvent = "order_change";
+
+			// Event: squad member lost
+			else if (m_iLastSquadCount > m_iCurrentSquadCount)
+				thoughtEvent = "casualty";
+
+			if (thoughtEvent != "" && m_fThoughtCooldown >= 15.0)
+			{
+				m_fThoughtCooldown = 0;
+				m_fThoughtTimer = 0;
+				Print("[LLMBridge] Thought event: " + thoughtEvent);
+				PollThoughts(thoughtEvent);
+			}
+
+			// Fallback: idle thoughts after 60s of no events
+			if (m_fThoughtTimer >= 60.0)
 			{
 				m_fThoughtTimer = 0;
-				PollThoughts();
+				m_fThoughtCooldown = 0;
+				PollThoughts("idle");
 			}
 		}
 
@@ -335,6 +384,7 @@ class LLMBridge
 		}
 		sEnemies += "]";
 		sJSON += ",\"enemies\":" + sEnemies + ",\"enemy_count\":" + enemyCount;
+		m_iCurrentEnemyCount = enemyCount;
 
 		// F3.5: Environment description
 		string sEnv = ScanEnvironment(squadPos);
@@ -462,6 +512,7 @@ class LLMBridge
 				grp.GetAgents(agents);
 				agentCount = agents.Count();
 				memberCount = grp.GetPlayerAndAgentCount();
+				m_iCurrentSquadCount = memberCount;
 				array<AIWaypoint> wps = {};
 				grp.GetWaypoints(wps);
 				wpCount = wps.Count();
@@ -581,6 +632,7 @@ class LLMBridge
 		}
 
 		Print("[LLMBridge] LLM action=" + action + " offset=" + BoolStr(hasOffset));
+		m_sCurrentLLMAction = action;
 
 		if (action == m_sLastAction && action != "HOLD") return;
 		m_sLastAction = action;
@@ -799,11 +851,11 @@ class LLMBridge
 
 	//------------------------------------------------------------------------------------------------
 	// F2.7: Individual AI Brains — poll and display thoughts
-	void PollThoughts()
+	void PollThoughts(string thoughtEvent = "")
 	{
 		EnsureRest();
 		LLMBridgeRestCallback cb = CreateCallback("/ai_thought");
-		m_Rest.GET(cb, "/ai_thought");
+		m_Rest.GET(cb, "/ai_thought?event=" + thoughtEvent);
 	}
 
 	//------------------------------------------------------------------------------------------------

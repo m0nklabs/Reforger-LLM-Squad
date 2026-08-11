@@ -374,11 +374,77 @@ def assign_personalities(squad):
             personality = PERSONALITIES[h % len(PERSONALITIES)]
             app_state["ai_personalities"][m.name] = personality
 
-def generate_ai_thoughts():
-    """Generate thoughts for all squad members based on last SITREP. One LLM call for all."""
+def generate_ai_thoughts(event: str = ""):
+    """Generate thoughts for squad members, triggered by events.
+    
+    Event types:
+    - "contact": enemy detected, thoughts should be tactical/urgent
+    - "clear": enemies eliminated, thoughts about survival/relief
+    - "order_change": LLM order changed, react to new orders
+    - "casualty": squad member lost, grief/anger/determination
+    - "idle": no events for 60s, casual banter
+    - "leader_downed": leader is down, panic/medic urgency
+    - "leader_recovered": leader back up, relief
+    """
     sitrep = app_state.get("last_sitrep")
     if not sitrep or not sitrep.squad:
         return {"thoughts": []}
+
+    # Safety net: skip LLM if no SITREPs received in 90s
+    if time.time() - app_state.get("last_sitrep_time", 0) > 90:
+        return {"thoughts": []}
+
+    assign_personalities(sitrep.squad)
+
+    # Dedup: still use fingerprint but event changes it
+    fp = _sitrep_fingerprint(sitrep) + "|event=" + event
+    if fp == app_state["last_thought_fingerprint"] and app_state["cached_thoughts"] and event == "":
+        return app_state["cached_thoughts"]
+
+    app_state["last_thought_fingerprint"] = fp
+    app_state["thought_calls"] += 1
+
+    # Build member descriptions
+    member_lines = []
+    for m in sitrep.squad:
+        p = app_state["ai_personalities"].get(m.name, "STEADY")
+        member_lines.append(f"- {m.name} ({p}): order={m.order}, sitrep={m.sitrep}")
+
+    situation = get_situation_text(sitrep) + get_battle_memory(3)
+    members_text = "\n".join(member_lines)
+    
+    # Event-specific context
+    event_context = ""
+    if event == "contact":
+        event_context = "
+EVENT: Enemy contact detected! The squad just spotted hostiles. Thoughts should reflect urgency and combat awareness.
+"
+    elif event == "clear":
+        event_context = "
+EVENT: All enemies eliminated. Area is clear. Thoughts should reflect relief, survival, maybe dark humor.
+"
+    elif event == "order_change":
+        event_context = "
+EVENT: Orders just changed. React to the new order immediately.
+"
+    elif event == "casualty":
+        event_context = "
+EVENT: A squad member just went down. React with grief, anger, or determination. Keep it short.
+"
+    elif event == "idle":
+        event_context = "
+CONTEXT: Quiet moment, no immediate threats. Casual banter, checking on each other, or observing surroundings.
+"
+    elif event == "leader_downed":
+        event_context = "
+EVENT: The squad leader is DOWN! Panic, urgency, calls for medic, protective instinct.
+"
+    elif event == "leader_recovered":
+        event_context = "
+EVENT: The squad leader is back up. Relief, determination, ready to continue.
+"
+    
+    prompt = f"Situation:\n{situation}\n{event_context}\nSquad members:\n{members_text}\n\nGenerate one thought per member reacting to the current situation."
 
     # Safety net: skip LLM if no SITREPs received in 90s (no active players)
     if time.time() - app_state.get("last_sitrep_time", 0) > 90:
@@ -684,8 +750,8 @@ async def receive_waypoint(request: Request):
 # /ai_thought — F2.7: Individual AI Brains
 # =======================================================================
 @app.get("/ai_thought")
-async def get_ai_thought():
-    result = generate_ai_thoughts()
+async def get_ai_thought(event: str = ""):
+    result = generate_ai_thoughts(event)
     return result
 
 # =======================================================================
