@@ -512,6 +512,14 @@ class LLMBridge
 			Print("[LLMBridge] DISMOUNT: ordering squad to exit vehicle");
 			SCR_AIWorld.DismountVehicle();
 		}
+		else if (cmd == "despawn_opfor")
+		{
+			Print("[LLMBridge] DESPAWN_OPFOR: clearing all OPFOR forces");
+			if (g_StavkaInstance)
+				g_StavkaInstance.DespawnAllOPFOR();
+			else
+				Print("[LLMBridge] No Stavka instance available");
+		}
 		else
 		{
 			Print("[LLMBridge] Unknown order: " + cmd);

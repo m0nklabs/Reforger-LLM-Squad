@@ -104,6 +104,17 @@ class StavkaController
 		{
 			m_Rest = GetGame().GetRestApi().GetContext(m_sBridgeURL);
 			Print("[Stavka] REST context created");
+			}
+
+		// Skip if no player is connected - do not spawn OPFOR into empty server
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (pm)
+		{
+			int activePlayers = pm.GetPlayerCount();
+			if (activePlayers == 0)
+			{
+				return;
+		}
 		}
 
 		// F3.3: Send current OPFOR count to bridge for adaptive strategy
@@ -457,6 +468,36 @@ class StavkaController
 	//------------------------------------------------------------------------------------------------
 	// F3.4: Get all OPFOR agent positions for enemy detection
 	// Returns array of vector positions of alive OPFOR soldiers
+	//------------------------------------------------------------------------------------------------
+	// Despawn all OPFOR forces — clears the battlefield
+	void DespawnAllOPFOR()
+	{
+		int cleared = 0;
+		for (int i = m_aOPFORGroups.Count() - 1; i >= 0; i--)
+		{
+			SCR_AIGroup grp = m_aOPFORGroups[i];
+			if (!grp)
+			{
+				m_aOPFORGroups.RemoveOrdered(i);
+				continue;
+			}
+			array<AIAgent> agents = {};
+			grp.GetAgents(agents);
+			for (int j = agents.Count() - 1; j >= 0; j--)
+			{
+				AIAgent agent = agents[j];
+				if (agent)
+				{
+					IEntity ent = agent.GetControlledEntity();
+					if (ent) SCR_EntityHelper.DeleteEntityAndChildren(ent);
+					cleared++;
+				}
+			}
+			m_aOPFORGroups.RemoveOrdered(i);
+		}
+		Print("[Stavka] Despawned " + cleared + " OPFOR soldiers");
+	}
+
 	array<vector> GetEnemyPositions()
 	{
 		array<vector> positions = {};

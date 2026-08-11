@@ -410,6 +410,18 @@ modded class SCR_AIWorld
 			Print("[AutoSquad] Slave group already exists: " + existingSlave);
 			if (!existingSlave.IsAIActivated())
 				existingSlave.ActivateAI();
+			// Set faction on existing slave group (may have been missing)
+			FactionAffiliationComponent exMasterFac = FactionAffiliationComponent.Cast(masterGroup.FindComponent(FactionAffiliationComponent));
+			FactionAffiliationComponent exSlaveFac = FactionAffiliationComponent.Cast(existingSlave.FindComponent(FactionAffiliationComponent));
+			if (exMasterFac && exSlaveFac)
+			{
+				Faction exFaction = exMasterFac.GetAffiliatedFaction();
+				if (exFaction)
+				{
+					exSlaveFac.SetAffiliatedFaction(exFaction);
+					Print("[AutoSquad] Existing slave group faction set to: " + exFaction.GetFactionKey());
+				}
+			}
 			return existingSlave;
 		}
 
