@@ -259,16 +259,16 @@ modded class SCR_AIWorld
 			if (!aiCtrl) { Print("[AutoSquad] LiveManual: no AIControlComponent on #" + i); continue; }
 
 			// Add to SLAVE group FIRST (NOT master group!) — this triggers RPL broadcast
-		// Set faction on each AI soldier to match master group faction
-		FactionAffiliationComponent mFac = FactionAffiliationComponent.Cast(grp.FindComponent(FactionAffiliationComponent));
+		// Set faction on each AI soldier using FactionManager (group doesn't have FactionAffiliationComponent)
 		FactionAffiliationComponent aiFac = FactionAffiliationComponent.Cast(aiEnt.FindComponent(FactionAffiliationComponent));
-		if (mFac && aiFac)
+		if (aiFac && playerFac)
 		{
-			Faction grpFaction = mFac.GetAffiliatedFaction();
-			if (grpFaction)
-			{
-				aiFac.SetAffiliatedFaction(grpFaction);
-			}
+			aiFac.SetAffiliatedFaction(playerFac);
+			Print("[AutoSquad] LiveManual: soldier #" + i + " faction set to " + facKey);
+		}
+		else
+		{
+			Print("[AutoSquad] LiveManual: WARNING - could not set faction on soldier #" + i + " (aiFac=" + aiFac + " playerFac=" + playerFac + ")");
 		}
 
 			slaveGroup.AddAgentFromControlledEntity(aiEnt);
@@ -427,16 +427,24 @@ modded class SCR_AIWorld
 			Print("[AutoSquad] Slave group already exists: " + existingSlave);
 			if (!existingSlave.IsAIActivated())
 				existingSlave.ActivateAI();
-			// Set faction on existing slave group (may have been missing)
-			FactionAffiliationComponent exMasterFac = FactionAffiliationComponent.Cast(masterGroup.FindComponent(FactionAffiliationComponent));
-			FactionAffiliationComponent exSlaveFac = FactionAffiliationComponent.Cast(existingSlave.FindComponent(FactionAffiliationComponent));
-			if (exMasterFac && exSlaveFac)
+			// Set faction on existing slave group via FactionManager
+			SCR_FactionManager exFm = SCR_FactionManager.Cast(GetGame().GetFactionManager());
+			if (exFm)
 			{
-				Faction exFaction = exMasterFac.GetAffiliatedFaction();
+				string exFactionKey = masterGroup.GetFactionName();
+				Faction exFaction = exFm.GetFactionByKey(exFactionKey);
 				if (exFaction)
 				{
-					exSlaveFac.SetAffiliatedFaction(exFaction);
-					Print("[AutoSquad] Existing slave group faction set to: " + exFaction.GetFactionKey());
+					FactionAffiliationComponent exSlaveFac = FactionAffiliationComponent.Cast(existingSlave.FindComponent(FactionAffiliationComponent));
+					if (exSlaveFac)
+					{
+						exSlaveFac.SetAffiliatedFaction(exFaction);
+						Print("[AutoSquad] Existing slave group faction set to: " + exFactionKey);
+					}
+					else
+					{
+						Print("[AutoSquad] WARNING: slave group has no FactionAffiliationComponent");
+					}
 				}
 			}
 			return existingSlave;
@@ -482,22 +490,25 @@ modded class SCR_AIWorld
 		slaveGroup.SetDeleteWhenEmpty(false);
 		slaveGroup.ActivateAI();
 
-		// CRITICAL: Set slave group faction to match master group
-		// Without this, AI soldiers may engage the player as hostile
-		FactionAffiliationComponent masterFac = FactionAffiliationComponent.Cast(masterGroup.FindComponent(FactionAffiliationComponent));
-		FactionAffiliationComponent slaveFac = FactionAffiliationComponent.Cast(slaveGroup.FindComponent(FactionAffiliationComponent));
-		if (masterFac && slaveFac)
+		// Set slave group faction via FactionManager (master group may not have FactionAffiliationComponent)
+		SCR_FactionManager newFm = SCR_FactionManager.Cast(GetGame().GetFactionManager());
+		if (newFm)
 		{
-			Faction masterFaction = masterFac.GetAffiliatedFaction();
-			if (masterFaction)
+			string newFactionKey = masterGroup.GetFactionName();
+			Faction newFaction = newFm.GetFactionByKey(newFactionKey);
+			if (newFaction)
 			{
-				slaveFac.SetAffiliatedFaction(masterFaction);
-				Print("[AutoSquad] Slave group faction set to: " + masterFaction.GetFactionKey());
+				FactionAffiliationComponent newSlaveFac = FactionAffiliationComponent.Cast(slaveGroup.FindComponent(FactionAffiliationComponent));
+				if (newSlaveFac)
+				{
+					newSlaveFac.SetAffiliatedFaction(newFaction);
+					Print("[AutoSquad] Slave group faction set to: " + newFactionKey);
+				}
+				else
+				{
+					Print("[AutoSquad] WARNING: new slave group has no FactionAffiliationComponent");
+				}
 			}
-		}
-		else
-		{
-			Print("[AutoSquad] WARNING: could not set slave group faction - friendly fire risk!");
 		}
 
 		// Link slave to master via GroupsManager
