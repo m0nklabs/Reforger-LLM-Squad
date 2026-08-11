@@ -121,6 +121,7 @@ Never invent these — every single one has already gone wrong once:
 - **Event-driven thoughts** (contact/clear/order_change/casualty/idle, 15s cooldown)
 - **Dynamic faction** (squad + OPFOR adapt to player faction)
 - **Faction fix** (FactionManager.GetPlayerFaction, not group components)
+- **Slave group waypoint fix**: ExecuteWaypoint/ClearSquadWaypoints/GetSquadPosition now use FindAIGroup() which targets the SLAVE group (where AI agents live) instead of the MASTER group. SetGroupFormation also fixed to target slave group.
 - **Web Dashboard** (`GET /dashboard`): Fixed header/left/right/footer grid layout, dark mode (toggle), mobile responsive. Command buttons: spawn reinforcements, hold, move (E/W/N/S + custom dx/dz), follow, formation, medic, despawn, despawn_opfor. Polls /health (3s), /status (5s), /soldiers (10s). SITREP squad cards, enemy contacts, battle log, AI thoughts, soldier roster panels.
 
 ### Development roadmap

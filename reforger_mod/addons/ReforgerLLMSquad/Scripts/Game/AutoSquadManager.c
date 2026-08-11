@@ -400,15 +400,23 @@ modded class SCR_AIWorld
 		SCR_AIGroup grp = s_PlayerGroup;
 		if (!grp) { Print("[AutoSquad] SetFormation: no group"); return; }
 
-		AIFormationComponent formationComp = AIFormationComponent.Cast(grp.FindComponent(AIFormationComponent));
+		// AI formation is on the SLAVE group, not the master group!
+		SCR_AIGroup slaveGroup = grp.GetSlave();
+		SCR_AIGroup targetGroup = slaveGroup;
+		if (!targetGroup) targetGroup = grp; // fallback to master if no slave
+
+		string groupType = "master";
+		if (slaveGroup) groupType = "slave";
+
+		AIFormationComponent formationComp = AIFormationComponent.Cast(targetGroup.FindComponent(AIFormationComponent));
 		if (formationComp)
 		{
 			formationComp.SetFormation(formationName);
-			Print("[AutoSquad] SetFormation: " + formationName);
+			Print("[AutoSquad] SetFormation: " + formationName + " on " + groupType + " group");
 		}
 		else
 		{
-			Print("[AutoSquad] SetFormation: no AIFormationComponent!");
+			Print("[AutoSquad] SetFormation: no AIFormationComponent on " + groupType + " group!");
 		}
 	}
 

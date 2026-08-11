@@ -773,9 +773,29 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
+	// Find the AI group: slave group if it exists (where AI agents live), else master group
+	SCR_AIGroup FindAIGroup()
+	{
+		SCR_AIGroup master = FindPlayerGroup();
+		if (!master) return null;
+
+		// AI agents are in the SLAVE group, not the master group!
+		SCR_AIGroup slave = master.GetSlave();
+		if (slave)
+		{
+			Print("[LLMBridge] Using SLAVE group for AI: " + slave);
+			return slave;
+		}
+
+		// No slave group - fall back to master (singleplayer or no AI spawned yet)
+		return master;
+	}
+
+	//------------------------------------------------------------------------------------------------
 	vector GetSquadPosition()
 	{
-		SCR_AIGroup grp = FindPlayerGroup();
+		// Try slave group first (where AI agents live)
+		SCR_AIGroup grp = FindAIGroup();
 		if (grp)
 		{
 			array<AIAgent> agents = {};
@@ -786,11 +806,15 @@ class LLMBridge
 				if (ent) return ent.GetOrigin();
 			}
 		}
+		// Fall back to player position (squad follows player anyway)
 		PlayerManager pm = GetGame().GetPlayerManager();
 		if (pm)
 		{
-			IEntity playerEnt = pm.GetPlayerControlledEntity(1);
-			if (playerEnt) return playerEnt.GetOrigin();
+			for (int pid = 1; pid <= 32; pid++)
+			{
+				IEntity playerEnt = pm.GetPlayerControlledEntity(pid);
+				if (playerEnt) return playerEnt.GetOrigin();
+			}
 		}
 		return "0 0 0";
 	}
@@ -798,8 +822,8 @@ class LLMBridge
 	//------------------------------------------------------------------------------------------------
 	void ExecuteWaypoint(string sAction, vector vPos)
 	{
-		SCR_AIGroup grp = FindPlayerGroup();
-		if (!grp) { Print("[LLMBridge] No player group (trying dynamic lookup failed)"); return; }
+		SCR_AIGroup grp = FindAIGroup();
+		if (!grp) { Print("[LLMBridge] No AI group found (slave or master)"); return; }
 		if (!Replication.IsServer()) return;
 
 		string prefabName = WP_MOVE;
@@ -821,7 +845,7 @@ class LLMBridge
 		wp.SetCompletionRadius(15.0);
 		ClearSquadWaypoints();
 		grp.AddWaypoint(wp);
-		Print("[LLMBridge] Waypoint at " + vPos + " (" + sAction + ")");
+		Print("[LLMBridge] Waypoint at " + vPos + " (" + sAction + ") on group " + grp);
 
 		string sID = "WP_" + sAction + "_" + m_aWaypoints.Count();
 		LLMWaypoint lwp = new LLMWaypoint(sID, vPos, sAction);
@@ -831,7 +855,7 @@ class LLMBridge
 
 	void ClearSquadWaypoints()
 	{
-		SCR_AIGroup grp = FindPlayerGroup();
+		SCR_AIGroup grp = FindAIGroup();
 		if (!grp) return;
 		array<AIWaypoint> existing = {};
 		grp.GetWaypoints(existing);
@@ -840,7 +864,7 @@ class LLMBridge
 			if (wp) grp.RemoveWaypoint(wp);
 		}
 		if (existing.Count() > 0)
-			Print("[LLMBridge] Cleared " + existing.Count() + " waypoints");
+			Print("[LLMBridge] Cleared " + existing.Count() + " waypoints from AI group");
 	}
 
 	void SetAllOrders(string sOrder)
