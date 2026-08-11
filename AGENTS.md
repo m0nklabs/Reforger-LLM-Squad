@@ -57,7 +57,7 @@ Never invent these — every single one has already gone wrong once:
 ## Critical rules (hard-won lessons)
 
 1. **Testing is empirical**: kill → `launch_ds.bat` → ~55s → `check_latest_log.ps1`. Crash signature: log ~1145 bytes. `SCRIPT (E)` in base-game `.c` files AFTER your file = cascade noise; fix YOUR first error first.
-2. **Route sync**: endpoints in `LLMBridge.c` must match `main.py`. Game sends via GET `?data=<json>` (POST body doesn't transmit in Enforce). Endpoints: `/health`, `/sitrep`, `/command`, `/status`, `/waypoint`, `/orders`, `/ai_thought`, `/stavka`, `/voice`, `/tts`, `/soldiers`.
+2. **Route sync**: endpoints in `LLMBridge.c` must match `main.py`. Game sends via GET `?data=<json>` (POST body doesn't transmit in Enforce). Endpoints: `/health`, `/sitrep`, `/command`, `/status`, `/waypoint`, `/orders`, `/ai_thought`, `/stavka`, `/voice`, `/tts`, `/soldiers`, `/dashboard` (web UI).
 3. **Port sync**: bridge runs on **5001** (config.json, bats, LLMBridge default URL).
 4. **Never commit secrets.** `config.json` (API key) is gitignored + pre-commit blocked; only commit `config.example.json`.
 5. Never change the GUID in `addon.gproj` (pre-commit hook blocks this).
@@ -121,6 +121,7 @@ Never invent these — every single one has already gone wrong once:
 - **Event-driven thoughts** (contact/clear/order_change/casualty/idle, 15s cooldown)
 - **Dynamic faction** (squad + OPFOR adapt to player faction)
 - **Faction fix** (FactionManager.GetPlayerFaction, not group components)
+- **Web Dashboard** (`GET /dashboard`): Fixed header/left/right/footer grid layout, dark mode (toggle), mobile responsive. Command buttons: spawn reinforcements, hold, move (E/W/N/S + custom dx/dz), follow, formation, medic, despawn, despawn_opfor. Polls /health (3s), /status (5s), /soldiers (10s). SITREP squad cards, enemy contacts, battle log, AI thoughts, soldier roster panels.
 
 ### Development roadmap
 - **F7: Individual AI Soldier Memory (IMPLEMENTED)**: Each soldier gets personal JSON memory file (`ai_soldiers/{name}.json`). Tracks: name, personality, birth_date, personal event log (50 max), opinions, mood, relationships, kills, battles survived, status (alive/dead). Death = retain 7 days → archive to `graveyard/`. Thoughts generated from personal history.

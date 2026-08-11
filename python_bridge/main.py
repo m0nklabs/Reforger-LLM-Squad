@@ -624,6 +624,21 @@ async def health_check():
     }
 
 # =======================================================================
+# GET /dashboard - Web UI command dashboard
+# =======================================================================
+from fastapi.responses import HTMLResponse
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def get_dashboard():
+    """Serve the command dashboard web UI."""
+    html_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+    try:
+        with open(html_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return HTMLResponse("<h1>dashboard.html not found</h1>", status_code=404)
+
+# =======================================================================
 # GET /tts - Phase 3: TTS handler status
 # =======================================================================
 @app.get("/tts")
@@ -887,34 +902,14 @@ async def _get_data(request: Request) -> dict:
         except: pass
     return None
 
-if __name__ == "__main__":
-    import uvicorn
-    # The module-level monkey-patch above handles Reforger's Upgrade headers
-    # in ALL modes (CLI and python main.py). It silently treats non-WebSocket
-    # Upgrade headers as normal HTTP (RFC 7230 §6.1) without logging warnings.
-    #
-    # We do NOT use ws="none" because it sets ws_protocol_class=None, which
-    # triggers uvicorn's "No supported WebSocket library detected" warning.
-    # Since the websockets library IS installed, we let uvicorn auto-detect it.
-    # The monkey-patch ensures only Upgrade: websocket is treated as a WS upgrade;
-    # Reforger's non-WS Upgrade headers pass through as normal HTTP.
-    uvicorn.run(
-        app,
-        host=CONFIG["server"]["host"],
-        port=CONFIG["server"]["port"],
-        log_level=CONFIG["logging"].get("level", "INFO").lower(),
-        timeout_keep_alive=30,
-        limit_concurrency=20,
-        timeout_graceful_shutdown=5,
-    )
-
-
 @app.on_event("startup")
 async def startup_event():
     """F7: Initialize soldier memory system on startup."""
     ensure_soldier_dirs()
     cleanup_dead_soldiers()
     print(f"[F7] Soldier memory system initialized: {SOLDIER_MEMORY_DIR}")
+
+
 
 
 @app.get("/soldiers")
@@ -941,3 +936,24 @@ async def get_soldier_memories():
         except (json.JSONDecodeError, IOError):
             pass
     return {"soldiers": soldiers, "total": len(soldiers)}
+
+if __name__ == "__main__":
+    import uvicorn
+    # The module-level monkey-patch above handles Reforger's Upgrade headers
+    # in ALL modes (CLI and python main.py). It silently treats non-WebSocket
+    # Upgrade headers as normal HTTP (RFC 7230 §6.1) without logging warnings.
+    #
+    # We do NOT use ws="none" because it sets ws_protocol_class=None, which
+    # triggers uvicorn's "No supported WebSocket library detected" warning.
+    # Since the websockets library IS installed, we let uvicorn auto-detect it.
+    # The monkey-patch ensures only Upgrade: websocket is treated as a WS upgrade;
+    # Reforger's non-WS Upgrade headers pass through as normal HTTP.
+    uvicorn.run(
+        app,
+        host=CONFIG["server"]["host"],
+        port=CONFIG["server"]["port"],
+        log_level=CONFIG["logging"].get("level", "INFO").lower(),
+        timeout_keep_alive=30,
+        limit_concurrency=20,
+        timeout_graceful_shutdown=5,
+    )

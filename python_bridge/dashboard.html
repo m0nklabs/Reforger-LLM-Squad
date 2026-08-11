@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reforger LLM Squad — Command Dashboard</title>
+<style>
+/* ====== CSS Reset & Variables ====== */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0f1117;--bg-secondary:#1a1d29;--bg-tertiary:#252836;
+  --bg-hover:#2d3142;--text-primary:#e4e6ef;--text-secondary:#9295a8;
+  --text-muted:#6b6e7f;--accent:#4f8cff;--accent-hover:#3a78f0;
+  --success:#3dd68c;--warning:#ffbb33;--danger:#ff5566;--purple:#a855f7;
+  --border:#2a2d3a;--border-light:#363a4d;--radius:8px;--radius-sm:4px;
+  --header-h:56px;--footer-h:36px;--sidebar-w:240px;--sidebar-r-w:280px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,sans-serif;
+  --mono:"Cascadia Code","JetBrains Mono","Fira Code",monospace;
+}
+[data-theme="light"]{
+  --bg-primary:#f0f2f8;--bg-secondary:#ffffff;--bg-tertiary:#e8eaf2;
+  --bg-hover:#dde0ec;--text-primary:#1a1d29;--text-secondary:#4a4d5e;
+  --text-muted:#8a8d9f;--accent:#2563eb;--purple:#9333ea;
+  --border:#d0d3e0;--border-light:#c0c4d0;
+}
+
+/* ====== Layout Grid ====== */
+body{font-family:var(--font);background:var(--bg-primary);color:var(--text-primary);height:100vh;overflow:hidden;font-size:14px;line-height:1.4}
+.app{display:grid;grid-template-areas:"header header header" "left center right" "footer footer footer";grid-template-columns:var(--sidebar-w) 1fr var(--sidebar-r-w);grid-template-rows:var(--header-h) 1fr var(--footer-h);height:100vh}
+
+/* ====== Header ====== */
+.header{grid-area:header;background:var(--bg-secondary);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:16px;z-index:10}
+.header-logo{font-size:16px;font-weight:700;letter-spacing:-0.5px;white-space:nowrap}
+.header-logo span{color:var(--accent)}
+.header-stats{display:flex;gap:12px;align-items:center;flex:1;overflow:hidden}
+.stat-pill{display:flex;align-items:center;gap:6px;padding:4px 10px;background:var(--bg-tertiary);border-radius:var(--radius-sm);font-size:12px;white-space:nowrap}
+.stat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.stat-dot.online{background:var(--success);box-shadow:0 0 4px var(--success)}
+.stat-dot.offline{background:var(--danger)}
+.stat-dot.warn{background:var(--warning)}
+.theme-toggle{background:var(--bg-tertiary);border:1px solid var(--border-light);color:var(--text-primary);border-radius:var(--radius-sm);width:32px;height:32px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:background .15s}
+.theme-toggle:hover{background:var(--bg-hover)}
+
+/* ====== Left Sidebar — Commands ====== */
+.left-sidebar{grid-area:left;background:var(--bg-secondary);border-right:1px solid var(--border);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.section-title{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);font-weight:600;margin-bottom:2px;padding:0 4px}
+.btn{width:100%;padding:10px 12px;border:1px solid var(--border-light);background:var(--bg-tertiary);color:var(--text-primary);border-radius:var(--radius-sm);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:8px;justify-content:flex-start;text-align:left}
+.btn:hover{background:var(--bg-hover);border-color:var(--accent)}
+.btn:active{transform:scale(0.97)}
+.btn .icon{font-size:16px;width:20px;text-align:center}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.danger{border-color:var(--danger);color:var(--danger)}
+.btn.danger:hover{background:rgba(255,85,102,0.1)}
+.btn.medic{border-color:var(--success);color:var(--success)}
+.btn.medic:hover{background:rgba(61,214,140,0.1)}
+.btn.warn{border-color:var(--warning);color:var(--warning)}
+.btn.warn:hover{background:rgba(255,187,51,0.1)}
+.divider{height:1px;background:var(--border);margin:4px 0}
+.input-group{display:flex;flex-direction:column;gap:4px}
+.input-group label{font-size:11px;color:var(--text-muted);font-weight:500}
+.input-row{display:flex;gap:6px}
+.input-row input{width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-light);color:var(--text-primary);border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono)}
+.input-row input:focus{outline:none;border-color:var(--accent)}
+.formation-select{width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-light);color:var(--text-primary);border-radius:var(--radius-sm);font-size:12px}
+.formation-select:focus{outline:none;border-color:var(--accent)}
+
+/* ====== Center — SITREP & Battle Log ====== */
+.center{grid-area:center;background:var(--bg-primary);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.panel{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.panel-header{padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);display:flex;align-items:center;justify-content:space-between}
+.panel-header .badge{background:var(--accent);color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;text-transform:none}
+.panel-header .badge.danger{background:var(--danger)}
+.panel-header .badge.warn{background:var(--warning);color:#000}
+.panel-body{padding:10px 14px}
+
+/* Squad Members */
+.squad-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.soldier-card{background:var(--bg-tertiary);border-radius:var(--radius-sm);padding:10px;border-left:3px solid var(--accent);transition:border-color .15s}
+.soldier-card.dead{border-left-color:var(--danger);opacity:0.6}
+.soldier-card .name{font-weight:600;font-size:13px;display:flex;align-items:center;gap:4px}
+.soldier-card .detail{font-size:11px;color:var(--text-muted);margin-top:2px}
+.soldier-card .order-tag{display:inline-block;padding:1px 6px;background:var(--bg-primary);border-radius:3px;font-size:10px;font-weight:600;margin-top:4px;text-transform:uppercase}
+.psy-tag{font-size:9px;color:var(--purple);font-weight:600;text-transform:uppercase}
+
+/* Enemy contacts */
+.enemy-list{display:flex;flex-direction:column;gap:4px}
+.enemy-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(255,85,102,0.08);border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono)}
+.enemy-item .dist{color:var(--danger);font-weight:700}
+.enemy-item .dir{color:var(--warning)}
+
+/* Environment */
+.env-text{font-size:12px;color:var(--text-secondary);font-style:italic}
+
+/* Battle Log */
+.battle-log{font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--text-secondary);max-height:200px;overflow-y:auto}
+.battle-log .entry{padding:2px 0;border-bottom:1px solid var(--border)}
+.battle-log .entry .ts{color:var(--text-muted)}
+.battle-log .entry .type-ORDER{color:var(--accent)}
+.battle-log .entry .type-CONTACT{color:var(--danger)}
+.battle-log .entry .type-CRITICAL{color:var(--danger);font-weight:700}
+.battle-log .entry .type-RECOVERY{color:var(--success)}
+
+/* ====== Right Sidebar — AI Thoughts & Roster ====== */
+.right-sidebar{grid-area:right;background:var(--bg-secondary);border-left:1px solid var(--border);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.thought-item{background:var(--bg-tertiary);border-radius:var(--radius-sm);padding:8px 10px;margin-bottom:6px;border-left:3px solid var(--purple)}
+.thought-item .author{font-size:11px;font-weight:700;color:var(--purple);margin-bottom:2px}
+.thought-item .text{font-size:12px;color:var(--text-secondary);font-style:italic;line-height:1.5}
+
+.roster-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:4px;transition:background .15s;cursor:default}
+.roster-item:hover{background:var(--bg-hover)}
+.roster-item .r-name{font-weight:600;font-size:12px;flex:1}
+.roster-item .r-status{font-size:10px;padding:1px 6px;border-radius:3px;text-transform:uppercase;font-weight:600}
+.r-status.alive{background:rgba(61,214,140,0.15);color:var(--success)}
+.r-status.dead{background:rgba(255,85,102,0.15);color:var(--danger)}
+.roster-item .r-kills{font-size:10px;color:var(--text-muted)}
+
+/* ====== Footer ====== */
+.footer{grid-area:footer;background:var(--bg-secondary);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:16px;font-size:11px;color:var(--text-muted)}
+.footer .f-item{display:flex;align-items:center;gap:6px}
+.footer .f-label{color:var(--text-muted)}
+.footer .f-value{color:var(--text-secondary);font-weight:600;font-family:var(--mono)}
+
+/* ====== Toast Notifications ====== */
+.toast-container{position:fixed;top:64px;right:16px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:var(--bg-tertiary);border:1px solid var(--border-light);border-radius:var(--radius);padding:10px 14px;font-size:13px;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.3);animation:slideIn .2s ease;pointer-events:auto}
+.toast.success{border-left:3px solid var(--success)}
+.toast.error{border-left:3px solid var(--danger)}
+.toast.info{border-left:3px solid var(--accent)}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* Empty states */
+.empty-state{text-align:center;color:var(--text-muted);font-size:12px;padding:16px;font-style:italic}
+
+/* Loading spinner */
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border-light);border-top-color:var(--accent);border-radius:50%;animation:spin 0.6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ====== Mobile Responsive ====== */
+@media(max-width:1100px){
+  .app{grid-template-columns:200px 1fr 220px}
+  :root{--sidebar-w:200px;--sidebar-r-w:220px}
+}
+@media(max-width:860px){
+  .app{grid-template-areas:"header" "center" "left" "right" "footer";grid-template-columns:1fr;grid-template-rows:var(--header-h) auto auto auto var(--footer-h);height:auto;min-height:100vh}
+  body{overflow-y:auto;height:auto}
+  .left-sidebar,.right-sidebar{border:none;border-top:1px solid var(--border);max-height:none}
+  .header-stats{display:none}
+  .squad-grid{grid-template-columns:1fr}
+  .toast-container{right:8px;left:8px}
+  .toast{max-width:none}
+}
+@media(max-width:500px){
+  .header-logo{font-size:13px}
+  .panel-body{padding:8px}
+}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-light);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ====== HEADER ====== -->
+  <header class="header">
+    <div class="header-logo">Reforger <span>LLM</span> Squad</div>
+    <div class="header-stats" id="headerStats">
+      <div class="stat-pill"><div class="stat-dot offline" id="dotBridge"></div><span id="txtBridge">Bridge: —</span></div>
+      <div class="stat-pill"><div class="stat-dot offline" id="dotPlayer"></div><span id="txtPlayer">Player: —</span></div>
+      <div class="stat-pill"><span id="txtLLM" style="color:var(--text-muted)">LLM: —</span></div>
+      <div class="stat-pill"><span id="txtSquad" style="color:var(--text-muted)">Squad: —</span></div>
+    </div>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
+  </header>
+
+  <!-- ====== LEFT SIDEBAR — COMMANDS ====== -->
+  <aside class="left-sidebar">
+    <div class="section-title">Reinforcements</div>
+    <button class="btn primary" onclick="sendOrder({cmd:'spawn'})">
+      <span class="icon">🪖</span> Spawn Squad at Player
+    </button>
+    <button class="btn" onclick="sendOrder({cmd:'follow'})">
+      <span class="icon">👥</span> Follow Leader
+    </button>
+
+    <div class="divider"></div>
+    <div class="section-title">Tactical Orders</div>
+    <button class="btn" onclick="sendOrder({cmd:'hold'})">
+      <span class="icon">🛑</span> Hold Position
+    </button>
+    <button class="btn warn" onclick="sendOrder({cmd:'move', offset:[100,0]})">
+      <span class="icon">➡️</span> Move East 100m
+    </button>
+    <button class="btn warn" onclick="sendOrder({cmd:'move', offset:[-100,0]})">
+      <span class="icon">⬅️</span> Move West 100m
+    </button>
+    <button class="btn warn" onclick="sendOrder({cmd:'move', offset:[0,-100]})">
+      <span class="icon">⬆️</span> Move North 100m
+    </button>
+    <button class="btn warn" onclick="sendOrder({cmd:'move', offset:[0,100]})">
+      <span class="icon">⬇️</span> Move South 100m
+    </button>
+
+    <div class="divider"></div>
+    <div class="section-title">Custom Move</div>
+    <div class="input-group">
+      <div class="input-row">
+        <div style="flex:1">
+          <label>dx (meters)</label>
+          <input type="number" id="moveDx" value="50" placeholder="dx">
+        </div>
+        <div style="flex:1">
+          <label>dz (meters)</label>
+          <input type="number" id="moveDz" value="0" placeholder="dz">
+        </div>
+      </div>
+      <button class="btn warn" onclick="customMove()" style="margin-top:4px">
+        <span class="icon">📍</span> Move to Offset
+      </button>
+    </div>
+
+    <div class="divider"></div>
+    <div class="section-title">Formation</div>
+    <select class="formation-select" id="formationSelect">
+      <option value="Column">Column</option>
+      <option value="Line">Line</option>
+      <option value="Wedge">Wedge</option>
+      <option value="File">File</option>
+      <option value="Staggered Column">Staggered Column</option>
+    </select>
+    <button class="btn" onclick="setFormation()" style="margin-top:4px">
+      <span class="icon">🔃</span> Set Formation
+    </button>
+
+    <div class="divider"></div>
+    <div class="section-title">Emergency</div>
+    <button class="btn medic" onclick="sendOrder({cmd:'medic'})">
+      <span class="icon">🚑</span> Medic! Rescue Leader
+    </button>
+    <button class="btn danger" onclick="sendOrder({cmd:'despawn'})">
+      <span class="icon">💀</span> Despawn Squad
+    </button>
+    <button class="btn danger" onclick="sendOrder({cmd:'despawn_opfor'})">
+      <span class="icon">🧹</span> Despawn OPFOR
+    </button>
+  </aside>
+
+  <!-- ====== CENTER — SITREP & BATTLE LOG ====== -->
+  <main class="center">
+
+    <!-- SITREP Panel -->
+    <div class="panel">
+      <div class="panel-header">
+        SITREP
+        <span class="badge" id="sitrepBadge">—</span>
+      </div>
+      <div class="panel-body">
+        <div id="squadGrid" class="squad-grid">
+          <div class="empty-state">Awaiting first SITREP from game...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Enemy Contacts -->
+    <div class="panel" id="enemyPanel" style="display:none">
+      <div class="panel-header">
+        Enemy Contacts
+        <span class="badge danger" id="enemyBadge">0</span>
+      </div>
+      <div class="panel-body">
+        <div class="enemy-list" id="enemyList"></div>
+      </div>
+    </div>
+
+    <!-- Environment -->
+    <div class="panel" id="envPanel" style="display:none">
+      <div class="panel-header">Environment</div>
+      <div class="panel-body">
+        <div class="env-text" id="envText"></div>
+      </div>
+    </div>
+
+    <!-- Battle Log -->
+    <div class="panel">
+      <div class="panel-header">
+        Battle Memory
+        <span class="badge warn" id="logBadge">0</span>
+      </div>
+      <div class="panel-body">
+        <div class="battle-log" id="battleLog">
+          <div class="empty-state">No battle events yet.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ====== RIGHT SIDEBAR — THOUGHTS & ROSTER ====== -->
+  <aside class="right-sidebar">
+    <!-- AI Thoughts -->
+    <div class="section-title">AI Soldier Thoughts</div>
+    <div id="thoughtsList">
+      <div class="empty-state">No thoughts generated yet.</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Soldier Roster -->
+    <div class="section-title">Soldier Roster</div>
+    <div id="rosterList">
+      <div class="empty-state">No soldier data.</div>
+    </div>
+  </aside>
+
+  <!-- ====== FOOTER ====== -->
+  <footer class="footer">
+    <div class="f-item"><span class="f-label">SITREPs:</span><span class="f-value" id="fSitreps">0</span></div>
+    <div class="f-item"><span class="f-label">LLM Calls:</span><span class="f-value" id="fLLMCalls">0</span></div>
+    <div class="f-item"><span class="f-label">Skipped:</span><span class="f-value" id="fSkipped">0</span></div>
+    <div class="f-item"><span class="f-label">Errors:</span><span class="f-value" id="fErrors">0</span></div>
+    <div class="f-item"><span class="f-label">Uptime:</span><span class="f-value" id="fUptime">—</span></div>
+    <div class="f-item"><span class="f-label">Model:</span><span class="f-value" id="fModel">—</span></div>
+    <div class="f-item" style="margin-left:auto"><span class="f-label">Last poll:</span><span class="f-value" id="fPoll">—</span></div>
+  </footer>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+// ====== Config ======
+const POLL_HEALTH_MS = 3000;
+const POLL_STATUS_MS = 5000;
+const POLL_SOLDIERS_MS = 10000;
+const API_BASE = window.location.origin;
+
+// ====== State ======
+let lastSquadCount = 0;
+let lastEnemyCount = 0;
+
+// ====== Theme ======
+function toggleTheme(){
+  const html = document.documentElement;
+  const cur = html.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  document.getElementById('themeBtn').textContent = next === 'dark' ? '🌙' : '☀️';
+  localStorage.setItem('dashboard-theme', next);
+}
+(function initTheme(){
+  const saved = localStorage.getItem('dashboard-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.getElementById('themeBtn').textContent = saved === 'dark' ? '🌙' : '☀️';
+})();
+
+// ====== Toast ======
+function toast(msg, type='info'){
+  const c = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(),300); }, 3500);
+}
+
+// ====== Send Order ======
+async function sendOrder(order){
+  try{
+    const resp = await fetch(API_BASE + '/orders', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(order)
+    });
+    if(resp.ok){
+      const data = await resp.json();
+      toast('Order queued: ' + (order.cmd || JSON.stringify(order)), 'success');
+    } else {
+      toast('Failed to queue order: ' + resp.status, 'error');
+    }
+  } catch(e){
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+function customMove(){
+  const dx = parseInt(document.getElementById('moveDx').value) || 0;
+  const dz = parseInt(document.getElementById('moveDz').value) || 0;
+  sendOrder({cmd:'move', offset:[dx, dz]});
+}
+
+function setFormation(){
+  const form = document.getElementById('formationSelect').value;
+  sendOrder({cmd:'formation', formation: form});
+}
+
+// ====== Poll /health ======
+async function pollHealth(){
+  try{
+    const resp = await fetch(API_BASE + '/health');
+    const data = await resp.json();
+    
+    // Bridge status
+    document.getElementById('dotBridge').className = 'stat-dot online';
+    document.getElementById('txtBridge').textContent = 'Bridge: OK';
+
+    // Player active
+    const playerActive = data.players_active;
+    document.getElementById('dotPlayer').className = 'stat-dot ' + (playerActive ? 'online' : 'offline');
+    document.getElementById('txtPlayer').textContent = playerActive ? 'Player: Active' : 'Player: Inactive';
+
+    // LLM calls
+    document.getElementById('txtLLM').textContent = 'LLM: ' + data.llm_calls + ' calls';
+
+    // Squad count (from last status)
+    document.getElementById('txtSquad').textContent = 'Pending: ' + data.pending_orders + ' orders';
+
+    // Footer
+    document.getElementById('fSitreps').textContent = data.sitreps_received;
+    document.getElementById('fLLMCalls').textContent = data.llm_calls;
+    document.getElementById('fSkipped').textContent = data.sitreps_skipped_llm;
+    document.getElementById('fErrors').textContent = data.errors;
+    document.getElementById('fUptime').textContent = formatUptime(data.uptime_seconds);
+    document.getElementById('fModel').textContent = data.model || '—';
+    document.getElementById('fPoll').textContent = new Date().toLocaleTimeString();
+  } catch(e){
+    document.getElementById('dotBridge').className = 'stat-dot offline';
+    document.getElementById('txtBridge').textContent = 'Bridge: Offline';
+  }
+}
+
+function formatUptime(sec){
+  if(!sec || sec < 0) return '—';
+  const h = Math.floor(sec/3600);
+  const m = Math.floor((sec%3600)/60);
+  const s = Math.floor(sec%60);
+  if(h > 0) return h+'h '+m+'m';
+  if(m > 0) return m+'m '+s+'s';
+  return s+'s';
+}
+
+// ====== Poll /status ======
+async function pollStatus(){
+  try{
+    const resp = await fetch(API_BASE + '/status');
+    const data = await resp.json();
+    const state = data.state || {};
+    const sitrep = data.last_sitrep;
+
+    // Battle log
+    const blog = state.battle_log || [];
+    document.getElementById('logBadge').textContent = blog.length;
+    if(blog.length > 0){
+      const logEl = document.getElementById('battleLog');
+      logEl.innerHTML = blog.slice().reverse().map(e => {
+        const m = e.match(/^\[([^\]]+)\] (\w+): (.*)/);
+        if(m){
+          return '<div class="entry"><span class="ts">['+m[1]+']</span> <span class="type-'+m[2]+'">'+m[2]+'</span>: '+m[3]+'</div>';
+        }
+        return '<div class="entry">'+e+'</div>';
+      }).join('');
+    }
+
+    // AI Thoughts (cached)
+    const thoughts = state.cached_thoughts;
+    if(thoughts){
+      renderThoughts(thoughts);
+    }
+
+    // Leader state
+    const leaderState = state.last_leader_state || 'alive';
+    if(leaderState === 'downed'){
+      document.getElementById('sitrepBadge').textContent = 'LEADER DOWN';
+      document.getElementById('sitrepBadge').className = 'badge danger';
+    } else if(leaderState === 'dead'){
+      document.getElementById('sitrepBadge').textContent = 'KIA';
+      document.getElementById('sitrepBadge').className = 'badge danger';
+    } else {
+      document.getElementById('sitrepBadge').textContent = sitrep ? (sitrep.squad ? sitrep.squad.length + ' members' : '—') : '—';
+      document.getElementById('sitrepBadge').className = 'badge';
+    }
+
+    // SITREP squad
+    if(sitrep && sitrep.squad && sitrep.squad.length > 0){
+      renderSquad(sitrep);
+    }
+    
+    // Enemies
+    if(sitrep && sitrep.enemy_count > 0){
+      renderEnemies(sitrep);
+    } else {
+      document.getElementById('enemyPanel').style.display = 'none';
+    }
+
+    // Environment
+    if(sitrep && sitrep.environment){
+      document.getElementById('envPanel').style.display = '';
+      document.getElementById('envText').textContent = sitrep.environment;
+    } else {
+      document.getElementById('envPanel').style.display = 'none';
+    }
+
+  } catch(e){
+    // Silent fail, health poll shows connection status
+  }
+}
+
+function renderSquad(sitrep){
+  const grid = document.getElementById('squadGrid');
+  const personalities = (window._state && window._state.personalities) || {};
+  const members = sitrep.squad;
+  grid.innerHTML = members.map(m => {
+    const psy = personalities[m.name] || '';
+    const isDead = m.sitrep && (m.sitrep.toLowerCase().includes('dead') || m.sitrep.toLowerCase().includes('kia'));
+    return '<div class="soldier-card'+(isDead?' dead':'')+'">' +
+      '<div class="name">'+ escapeHtml(m.name) + (psy ? ' <span class="psy-tag">'+psy+'</span>' : '') + '</div>' +
+      '<div class="detail">Status: '+ escapeHtml(m.sitrep || '—') +'</div>' +
+      '<div class="order-tag">'+ escapeHtml(m.order || 'HOLD') +'</div>' +
+    '</div>';
+  }).join('');
+  return members.length;
+}
+
+function renderEnemies(sitrep){
+  const panel = document.getElementById('enemyPanel');
+  const badge = document.getElementById('enemyBadge');
+  const list = document.getElementById('enemyList');
+  panel.style.display = '';
+  badge.textContent = sitrep.enemy_count;
+  const enemies = sitrep.enemies || [];
+  list.innerHTML = enemies.map(e => {
+    const dx = e.dx || 0, dz = e.dz || 0, dist = e.dist || 0;
+    const compass = dist > 0 ? getCompass(dx, dz) : '?';
+    return '<div class="enemy-item"><span class="dist">'+Math.round(dist)+'m</span> <span class="dir">'+compass+'</span> <span>dx='+Math.round(dx)+' dz='+Math.round(dz)+'</span></div>';
+  }).join('');
+}
+
+function getCompass(dx, dz){
+  const angle = Math.atan2(-dz, dx) * 180 / Math.PI;
+  const a = angle < 0 ? angle + 360 : angle;
+  const dirs = ['E','SE','S','SW','W','NW','N','NE'];
+  return dirs[Math.floor((a + 22.5) / 45) % 8];
+}
+
+function renderThoughts(thoughts){
+  const el = document.getElementById('thoughtsList');
+  if(typeof thoughts === 'string'){
+    // Parse "Name: thought" lines
+    const lines = thoughts.split('\n').filter(l => l.trim());
+    el.innerHTML = lines.map(l => {
+      const idx = l.indexOf(':');
+      if(idx > 0){
+        const name = l.substring(0, idx).trim();
+        const text = l.substring(idx+1).trim();
+        return '<div class="thought-item"><div class="author">'+escapeHtml(name)+'</div><div class="text">'+escapeHtml(text)+'</div></div>';
+      }
+      return '<div class="thought-item"><div class="text">'+escapeHtml(l)+'</div></div>';
+    }).join('');
+  } else if(typeof thoughts === 'object' && thoughts !== null){
+    // If it's an object/array of thoughts
+    const items = Array.isArray(thoughts) ? thoughts : [thoughts];
+    el.innerHTML = items.map(t => {
+      const name = t.name || t.author || 'Unknown';
+      const text = t.thought || t.text || t.message || JSON.stringify(t);
+      return '<div class="thought-item"><div class="author">'+escapeHtml(name)+'</div><div class="text">'+escapeHtml(text)+'</div></div>';
+    }).join('');
+  }
+}
+
+// ====== Poll /soldiers ======
+async function pollSoldiers(){
+  try{
+    const resp = await fetch(API_BASE + '/soldiers');
+    const data = await resp.json();
+    const soldiers = data.soldiers || [];
+    const el = document.getElementById('rosterList');
+    
+    if(soldiers.length === 0){
+      el.innerHTML = '<div class="empty-state">No soldier data.</div>';
+      return;
+    }
+
+    // Also populate personalities for squad cards
+    window._state = window._state || {};
+    window._state.personalities = {};
+    soldiers.forEach(s => {
+      if(s.personality) window._state.personalities[s.name] = s.personality;
+    });
+
+    el.innerHTML = soldiers.map(s => {
+      const status = s.status || 'unknown';
+      const kills = s.kills || 0;
+      const battles = s.battles || 0;
+      const mood = s.mood || '';
+      return '<div class="roster-item">' +
+        '<span class="r-name">'+escapeHtml(s.name)+'</span>' +
+        '<span class="r-status '+status+'">'+status+'</span>' +
+        (kills > 0 ? '<span class="r-kills">💀'+kills+'</span>' : '') +
+        (battles > 0 ? '<span class="r-kills">⚔️'+battles+'</span>' : '') +
+      '</div>';
+    }).join('');
+  } catch(e){
+    // silent
+  }
+}
+
+function escapeHtml(str){
+  if(str === null || str === undefined) return '';
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ====== Start polling ======
+pollHealth();
+pollStatus();
+pollSoldiers();
+setInterval(pollHealth, POLL_HEALTH_MS);
+setInterval(pollStatus, POLL_STATUS_MS);
+setInterval(pollSoldiers, POLL_SOLDIERS_MS);
+</script>
+</body>
+</html>
