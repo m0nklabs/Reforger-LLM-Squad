@@ -14,6 +14,7 @@ Usage:  python_bridge\\venv\\Scripts\\python.exe python_bridge\\test_soldier_tho
 
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -273,6 +274,57 @@ def test_chatter_in_brief_log():
         bridge.SOLDIER_MEMORY_DIR.joinpath(f"{n}.json").unlink(missing_ok=True)
 
 
+def test_tool_result_stored_and_fed_back():
+    print("test_tool_result_stored_and_fed_back")
+    (bridge.SOLDIER_MEMORY_DIR / "Foxtrot_1.json").unlink(missing_ok=True)
+    bridge.app_state["last_sitrep"] = make_sitrep(["Foxtrot_1"])
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    # Cycle 1: soldier calls report_contact -> generate_ai_thoughts must store the result
+    fake = FakeClient(['{"thought": "Contact NE!", "mood": "alert", "tool": {"name": "report_contact", "args": {"direction": "NE", "distance": 100, "count": 2}}}'])
+    bridge.client = fake
+    r1 = bridge.generate_ai_thoughts("contact")
+    check("cycle1 thought carries tool", r1["thoughts"] and r1["thoughts"][0].get("tool"))
+    mem = bridge.load_soldier_memory("Foxtrot_1")
+    check("result stored in memory", "2 hostiles" in (mem.get("last_tool_result") or ""))
+    # Cycle 2: fresh generation -> consequence must appear in the next prompt
+    bridge.app_state["last_thought_fingerprint"] = None
+    fake2 = FakeClient(['{"thought": "Good, contact went out", "mood": "calm"}'])
+    bridge.client = fake2
+    bridge.generate_ai_thoughts("idle")
+    msgs = fake2.calls[0]
+    last_user = msgs[-1]["content"]
+    check("prompt contains last action result", "Your last action's result" in last_user and "2 hostiles" in last_user)
+    check("system prompt mentions consequences", "result" in msgs[0]["content"].lower())
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Foxtrot_1.json").unlink(missing_ok=True)
+
+
+def test_no_result_no_consequence_block():
+    print("test_no_result_no_consequence_block")
+    (bridge.SOLDIER_MEMORY_DIR / "Golf_1.json").unlink(missing_ok=True)
+    fake = FakeClient(['{"thought": "Nothing to report", "mood": "calm"}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Golf_1"]), "Situation:\nquiet.", "EVENT: idle\n")
+    msgs = fake.calls[0]
+    check("no consequence block when no tool was called", "last action's result" not in msgs[-1]["content"])
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Golf_1.json").unlink(missing_ok=True)
+
+
+def test_tool_result_in_batched_lines():
+    print("test_tool_result_in_batched_lines")
+    (bridge.SOLDIER_MEMORY_DIR / "Hotel_1.json").unlink(missing_ok=True)
+    result = bridge.handle_soldier_tool("Hotel_1", {"name": "report_clear", "args": {}})
+    mem = bridge.load_soldier_memory("Hotel_1")
+    mem["last_tool_result"] = result  # same store step generate_ai_thoughts does
+    bridge.save_soldier_memory("Hotel_1", mem)
+    fake = FakeClient(['{"thoughts": [{"name": "Hotel_1", "thought": "Clear is logged", "mood": "calm"}]}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_batched(make_sitrep(["Hotel_1"]), "Situation:\nquiet.", "")
+    check("batched prompt includes last action result", fake.calls[0][-1]["content"].count("Last action result") == 1)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Hotel_1.json").unlink(missing_ok=True)
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -293,6 +345,10 @@ def run_tests():
     test_chatter_helper_excludes_self()
     test_chatter_fed_into_prompt()
     test_chatter_in_brief_log()
+    print("=== A.3 tool consequence awareness unit tests ===")
+    test_tool_result_stored_and_fed_back()
+    test_no_result_no_consequence_block()
+    test_tool_result_in_batched_lines()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()

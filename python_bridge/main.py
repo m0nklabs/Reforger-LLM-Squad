@@ -1021,6 +1021,10 @@ You also hear your squadmates' most recent radio transmissions (included in the 
 as "Squadmate chatter"). React to them when it matters: acknowledge, answer, reassure,
 or push back - real soldiers talk to each other, not just to the situation.
 
+You may also see "Your last action's result": what happened after your previous tool call
+(order queued, report logged, medic requested). Learn from it - if it worked, keep doing
+it; if it didn't, adjust. Never mention the result text itself.
+
 OPTIONAL tool (only call when the situation genuinely warrants action - most of the time omit it):
 - report_contact(direction, distance, count): enemy sighting, report to squad
 - report_clear(): area is clear
@@ -1174,7 +1178,13 @@ def generate_ai_thoughts(event: str = ""):
         log_soldier_exchange(tname, tthought, tmood, brief)
         tool = t.get("tool")
         if isinstance(tool, dict) and tool.get("name"):
-            handle_soldier_tool(tname, tool)
+            tool_result = handle_soldier_tool(tname, tool)  # NOT "result" - would clobber the return dict
+            if tool_result:
+                # A.3: store the consequence so the NEXT prompt shows the soldier
+                # what their action actually did (order queued / event logged).
+                mem = load_soldier_memory(tname)
+                mem["last_tool_result"] = tool_result
+                save_soldier_memory(tname, mem)
     logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
     for t in thoughts:
         name = t.get("name", "?")
@@ -1197,11 +1207,13 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         own_thoughts = get_soldier_thought_history(m.name)
         social = get_social_summary(m.name)  # F8.4: relationships + opinions
         chatter = get_squadmate_recent_thoughts(sitrep, m.name)  # A.2
+        last_result = load_soldier_memory(m.name).get("last_tool_result")  # A.3
         member_lines.append(
             f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
             f"{social}\n"
             f"  Own recent thoughts:\n{own_thoughts}\n"
             + (f"  Squadmate chatter heard:\n{chatter}\n" if chatter else "")
+            + (f"  Last action result: {last_result}\n" if last_result else "")
             + f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
 
@@ -1295,6 +1307,10 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
                 f"\n\nSquadmate chatter (their most recent words - react if it matters):\n"
                 f"{chatter}"
             )
+        # A.3: consequence of the soldier's last tool call ("your action did X")
+        last_result = mem.get("last_tool_result")
+        if last_result:
+            user_content += f"\n\nYour last action's result: {last_result}"
         try:
             response = client.chat.completions.create(
                 model=CONFIG["llm"]["model"],
