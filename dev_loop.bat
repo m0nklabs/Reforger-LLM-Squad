@@ -14,4 +14,4 @@ echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\dev_loop.ps1"
 echo.
 echo  Loop finished. See scripts\dev_loop.log for details.
-pause
+exit

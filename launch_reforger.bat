@@ -33,4 +33,4 @@ echo.
 echo [CHECK] After startup: verify the newest console.log with
 echo         powershell -NoProfile -File scripts\check_latest_log.ps1
 echo.
-pause
+exit

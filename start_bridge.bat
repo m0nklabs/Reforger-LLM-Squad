@@ -36,4 +36,4 @@ echo.
 echo [TIP]  Open http://127.0.0.1:5001/docs for API docs
 echo [TIP]  Check python_bridge\bridge.log for details
 echo.
-pause
+exit
