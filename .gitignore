@@ -63,3 +63,4 @@ server.json
 # Runtime after-action reports (B.5) + persisted deployment recap (B.4)
 python_bridge/reports/
 python_bridge/pending_orders.json
+scripts/bridge_watchdog.log
