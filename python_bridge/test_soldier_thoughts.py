@@ -54,10 +54,11 @@ class FakeClient:
         return FakeResponse(content)
 
 
-def make_sitrep(names=None):
+def make_sitrep(names=None, alive=None):
     names = names or [f"Alpha_{i+1}" for i in range(3)]
+    alive = alive or {}
     return bridge.SitRepRequest(
-        squad=[bridge.SitRepMember(name=n, order="HOLD", sitrep="clear") for n in names],
+        squad=[bridge.SitRepMember(name=n, order="HOLD", sitrep="clear", alive=alive.get(n, True)) for n in names],
         enemies=[{"dx": 100, "dz": -50, "dist": 112}],
         enemy_count=1,
         environment="Day, clear",
@@ -353,16 +354,19 @@ def test_death_archives_and_grieves():
     (bridge.SOLDIER_MEMORY_DIR / "Kilo_1.json").unlink(missing_ok=True)
     (bridge.SOLDIER_MEMORY_DIR / "Kilo_2.json").unlink(missing_ok=True)
     (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_2.json").unlink(missing_ok=True)
-    # Kilo_2 has a history (kills/battles) then disappears from the SITREP
+    # Kilo_2 has a history (kills/battles) then the game CONFIRMS the loss
+    # via "alive": false (SITREP field). Confirmed deaths are immediate -
+    # no grace period needed.
     m2 = bridge.load_soldier_memory("Kilo_2")
     m2["kills"] = 7
     m2["battles_survived"] = 3
     bridge.save_soldier_memory("Kilo_2", m2)
     bridge.app_state["last_squad_names"] = ["Kilo_1", "Kilo_2"]
-    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_1"])
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_1", "Kilo_2"], alive={"Kilo_2": False})
     bridge.app_state["last_sitrep_time"] = time.time()
     bridge.app_state["last_thought_fingerprint"] = None
     bridge.app_state["cached_thoughts"] = None
+    bridge.app_state["missing_soldiers"] = {}
     fake = FakeClient(['{"thought": "Kilo 2 is gone...", "mood": "sad"}'])
     bridge.client = fake
     bridge.generate_ai_thoughts("casualty")
@@ -377,6 +381,128 @@ def test_death_archives_and_grieves():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_1.json").unlink(missing_ok=True)
     bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_2.json").unlink(missing_ok=True)
     bridge.SOLDIER_GRAVEYARD_DIR.joinpath("Kilo_2.json").unlink(missing_ok=True)
+
+
+def test_missing_grace_period_requires_two_cycles():
+    print("test_missing_grace_period_requires_two_cycles")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_3.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_4.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_4.json").unlink(missing_ok=True)
+    bridge.load_soldier_memory("Kilo_4")  # create memory file
+    bridge.app_state["last_squad_names"] = ["Kilo_3", "Kilo_4"]
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    # Cycle 1: Kilo_4 missing for the FIRST cycle -> suspicious, but NOT dead
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_3"])
+    bridge.generate_ai_thoughts("idle")
+    m4 = bridge.load_soldier_memory("Kilo_4")
+    check("one missing cycle does not kill", m4.get("status") == "alive")
+    check("missing counter incremented", bridge.app_state["missing_soldiers"].get("Kilo_4") == 1)
+    check("no graveyard entry after one cycle", not (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_4.json").exists())
+    # Cycle 2: still missing -> grace exhausted, marked dead
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_3"])
+    bridge.generate_ai_thoughts("idle")
+    m4 = bridge.load_soldier_memory("Kilo_4")
+    check("two missing cycles kill", m4.get("status") == "dead" and m4.get("death_date"))
+    check("missing counter cleaned", "Kilo_4" not in bridge.app_state["missing_soldiers"])
+    check("graveyard entry after grace", (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_4.json").exists())
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_3.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_4.json").unlink(missing_ok=True)
+    bridge.SOLDIER_GRAVEYARD_DIR.joinpath("Kilo_4.json").unlink(missing_ok=True)
+
+
+def test_reappearing_member_not_marked_dead():
+    print("test_reappearing_member_not_marked_dead")
+    # Transient gap (respawn re-link / squad rebuild): member absent for one
+    # cycle, back the next -> must survive untouched.
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_5.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_6.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_6.json").unlink(missing_ok=True)
+    bridge.load_soldier_memory("Kilo_6")
+    bridge.app_state["last_squad_names"] = ["Kilo_5", "Kilo_6"]
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    # Cycle 1: Kilo_6 missing
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_5"])
+    bridge.generate_ai_thoughts("idle")
+    check("missing counter at 1", bridge.app_state["missing_soldiers"].get("Kilo_6") == 1)
+    # Cycle 2: Kilo_6 is BACK (rebuild finished)
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_5", "Kilo_6"])
+    bridge.generate_ai_thoughts("idle")
+    m6 = bridge.load_soldier_memory("Kilo_6")
+    check("reappeared member alive", m6.get("status") == "alive" and not m6.get("death_date"))
+    check("missing counter reset", "Kilo_6" not in bridge.app_state["missing_soldiers"])
+    check("no graveyard entry", not (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_6.json").exists())
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_5.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_6.json").unlink(missing_ok=True)
+
+
+def test_already_dead_not_reprocessed():
+    print("test_already_dead_not_reprocessed")
+    # The game keeps reporting alive=false for a dead member (or the member
+    # stays absent): the bridge must not re-archive / re-grieve every cycle.
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_7.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_8.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_8.json").unlink(missing_ok=True)
+    bridge.load_soldier_memory("Kilo_8")
+    bridge.app_state["last_squad_names"] = ["Kilo_7", "Kilo_8"]
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    for _ in range(2):  # two consecutive cycles with the same confirmed loss
+        bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_7", "Kilo_8"], alive={"Kilo_8": False})
+        bridge.generate_ai_thoughts("casualty")
+    surv = bridge.load_soldier_memory("Kilo_7")
+    grief_opinions = [o for o in surv.get("opinions", []) if "fallen:Kilo_8" in o.get("topic", "")]
+    kia_events = [e for e in surv.get("events", []) if e.get("type") == "teammate_kia"]
+    check("no duplicate grief opinion", len(grief_opinions) == 1, str(len(grief_opinions)))
+    check("no duplicate kia events", len(kia_events) == 1, str(len(kia_events)))
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_7.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_8.json").unlink(missing_ok=True)
+    bridge.SOLDIER_GRAVEYARD_DIR.joinpath("Kilo_8.json").unlink(missing_ok=True)
+
+
+def test_dead_member_does_not_speak():
+    print("test_dead_member_does_not_speak")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_9.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_10.json").unlink(missing_ok=True)
+    sitrep = make_sitrep(["Kilo_9", "Kilo_10"], alive={"Kilo_10": False})
+    fake = FakeClient(['{"thought": "Kilo 10 was one of us...", "mood": "sad"}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(sitrep, "Situation:\nquiet.", "EVENT: casualty\n")
+    check("only living member gets a thought", [t["name"] for t in out] == ["Kilo_9"], str([t["name"] for t in out]))
+    check("one LLM call for one living member", len(fake.calls) == 1)
+    txt = bridge.get_situation_text(sitrep)
+    check("KIA marker in situation text", "[KIA - confirmed dead]" in txt)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_9.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_10.json").unlink(missing_ok=True)
+
+
+def test_session_boundary_resets_squad_state():
+    print("test_session_boundary_resets_squad_state")
+    # SITREP gap > 90s = player disconnected, new session. The old session's
+    # squad state must be forgotten so absentees are not false-KIA'd.
+    bridge.app_state["sitrep_count"] = 10
+    bridge.app_state["last_sitrep_time"] = time.time() - 200
+    bridge.app_state["last_squad_names"] = ["Old_1", "Old_2"]
+    bridge.app_state["missing_soldiers"] = {"Old_1": 2, "Old_2": 1}
+    check("boundary detected", bridge._check_session_boundary() is True)
+    check("squad names reset", bridge.app_state["last_squad_names"] == [])
+    check("missing counters reset", bridge.app_state["missing_soldiers"] == {})
+    # A recent SITREP (same session) must NOT reset
+    bridge.app_state["sitrep_count"] = 11
+    bridge.app_state["last_sitrep_time"] = time.time() - 5
+    bridge.app_state["last_squad_names"] = ["Old_1"]
+    bridge.app_state["missing_soldiers"] = {"Old_1": 1}
+    check("no boundary within session", bridge._check_session_boundary() is False)
+    check("state kept within session", bridge.app_state["last_squad_names"] == ["Old_1"])
+    bridge.app_state["last_squad_names"] = []
+    bridge.app_state["missing_soldiers"] = {}
 
 
 def test_replacement_resurrection_and_legacy():
@@ -437,6 +563,11 @@ def run_tests():
     test_no_identity_no_block()
     print("=== B.1 legacy & mourning unit tests ===")
     test_death_archives_and_grieves()
+    test_missing_grace_period_requires_two_cycles()
+    test_reappearing_member_not_marked_dead()
+    test_already_dead_not_reprocessed()
+    test_dead_member_does_not_speak()
+    test_session_boundary_resets_squad_state()
     test_replacement_resurrection_and_legacy()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)

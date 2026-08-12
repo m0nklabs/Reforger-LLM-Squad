@@ -121,8 +121,14 @@ Never invent these — every single one has already gone wrong once:
 60. **uv venv shim = two python.exe, ONE bridge**: `venv\Scripts\python.exe` created by `uv venv` is a launcher that spawns the real uv-managed python — `Get-CimInstance Win32_Process` shows TWO `python.exe main.py` entries (parent/child, same CreationDate). This is NOT the rule-38 two-bridge trap. Check `ParentProcessId` before assuming a duplicate.
 61. **A.2 chatter uses previous-cycle semantics**: squadmate chatter is read from memory FILES (last assistant message in each squadmate's `conversation`), so soldiers react to what squadmates said in the PREVIOUS generation cycle — generation stays parallel (no sequential coupling). First cycle = empty chatter, graceful. Chatter is persisted in the conversation brief (`| heard: ...`) so reactions stay in context.
 62. **Variable clobbering in generate_ai_thoughts (FIXED)**: the function built `result = {"thoughts": [...]}`, then the tool loop did `result = handle_soldier_tool(...)` — reassigning the return value to the tool string. Whenever a soldier called a tool, `/ai_thought` returned a bare string instead of the dict ("string indices must be integers" for the game). Caught by an A.3 unit test. Rule 36 family: after ANY refactor, verify every return path — and don't reuse a return-value variable for intermediate results.
-36. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
-37. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
+63. **B.1 death detection is dormant without game-side `alive` reporting**: `LLMBridge.c`'s `m_aSquadMembers` is a FIXED 5-member array, never filtered — SITREPs always list all 5 names, so bridge-side missing-name detection can never fire. `SendSITREP()` must report per-member `"alive": false` (check `SCR_DamageManagerComponent.IsDestroyed()` per agent) — game-side follow-up for V.1.
+64. **Death grace period (B.1)**: a member absent for ONE thought cycle is NOT dead — transient gaps happen (respawn re-link per rule 52, despawn → re-spawn rebuilds). Bridge marks dead only when: (a) CONFIRMED via `alive:false` in the SITREP, or (b) missing for `game.death_grace_cycles` (default 2) consecutive thought cycles. The absence counter accumulates over "known" members (previous squad ∪ already-missing), NOT just last cycle's squad — otherwise a member who drops out of `last_squad_names` stops accumulating.
+65. **Replacement resurrection must check `alive` (B.1)**: a dead member still reported `alive:false` is NOT a replacement — without the guard, every thought cycle resurrects → re-kills → re-grieves them (duplicate grief opinions/events). Resurrect only when the game reports the member alive.
+66. **Dead members don't speak (B.1)**: skip `alive:false` members in per-soldier AND batched thought generation; the adjutant situation text marks them `[KIA - confirmed dead]` so the LLM knows the squad is down a soldier.
+67. **update_social_bonds clobbers "mourned" (B.1)**: it recomputes relationship labels for every squad member — if dead members are included, the "casualty" event (+2 respect) overwrites the "mourned" relationship set during grief. Pass only ALIVE members.
+68. **Session boundary reset (B.1)**: a SITREP gap > 90s = player disconnected / new session. `_check_session_boundary()` (called in `receive_sitrep`) clears `last_squad_names` + `missing_soldiers` so a reconnect with a different squad composition does NOT false-KIA the previous session's absentees.
+69. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
+70. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
 
 ## Skills (detail docs — read when working in that area)
 - Reforger mod structure/loading/GUIDs → `@docs/skills/arma-reforger-modding.md`
@@ -167,6 +173,7 @@ Never invent these — every single one has already gone wrong once:
 - **Faction fix** (FactionManager.GetPlayerFaction, not group components)
 - **Slave group waypoint fix**: ExecuteWaypoint/ClearSquadWaypoints/GetSquadPosition now use FindAIGroup() which targets the SLAVE group (where AI agents live) instead of the MASTER group. SetGroupFormation also fixed to target slave group.
 - **Web Dashboard** (`GET /dashboard`): Fixed header/left/right/footer grid layout, dark mode (toggle), mobile responsive. Command buttons: spawn reinforcements, hold, move (E/W/N/S + custom dx/dz), follow, formation, medic, despawn, despawn_opfor. Polls /health (3s), /status (5s), /soldiers (10s). SITREP squad cards, enemy contacts, battle log, AI thoughts, soldier roster panels.
+- **B.1 Legacy & mourning (bridge side)**: death detection with two evidence signals — CONFIRMED (`alive:false` per SITREP member, new field, default True) marks dead immediately; MISSING for `game.death_grace_cycles` (2, config) consecutive thought cycles marks dead after a grace period (protects against transient gaps from respawn re-link/despawn). On death: soldier archived to graveyard with final stats, squadmates get `teammate_kia` grief event + "mourned" relationship + grief opinion (deduped — no re-archive/re-grief churn), dead members stop generating thoughts, adjutant situation text shows `[KIA]`. Replacement with the same callsign resurrects with predecessor legacy ("filling their boots", fed into system prompts). Session-boundary reset (SITREP gap > 90s) prevents false KIA across reconnect. Unit tests: confirmed death, grace period, reappearance, dedup, session boundary, dead-don't-speak. REMAINING (game-side, V.1): `SendSITREP()` must send per-member `alive` (rule 63) — today the fixed 5-member array keeps the missing-name path dormant.
 
 ### Development roadmap
 
@@ -176,7 +183,7 @@ F8.1–F8.11 are done (see Completed). The list below is the forward path, order
 ---
 
 #### Phase V — VALIDATE (do this FIRST; everything since F6 is untested live)
-- **V.1 LIVE TEST SESSION**: Connect client to `127.0.0.1:2001`, play 15+ min. Verify: auto-squad spawns 5 AI, SITREPs flow (bridge /health players_active=true), thoughts appear in radio chat, tool calls fire, medic/formation orders execute, respawn re-links squad (rule 52 fix), despawn actually removes AI (rule 51 fix). Fix whatever breaks — this is the current #1 risk.
+- **V.1 LIVE TEST SESSION**: Connect client to `127.0.0.1:2001`, play 15+ min. Verify: auto-squad spawns 5 AI, SITREPs flow (bridge /health players_active=true), thoughts appear in radio chat, tool calls fire, medic/formation orders execute, respawn re-links squad (rule 52 fix), despawn actually removes AI (rule 51 fix). GAME-SIDE TODO (B.1): extend `SendSITREP()` to send per-member `"alive": false` for destroyed agents (rule 63) so bridge death detection + grief actually fire in live play. Fix whatever breaks — this is the current #1 risk.
 - **V.2 Voice test with real mic**: Caps Lock PTT → Whisper → order → TTS reply. Verify the race fixes (rules 54-55) hold under real usage.
 - **V.3 Battlefield sanity**: enemy contact → thought event "contact" fires within 15s (rule 45 fix), leader downed → leader_downed event + MEDIC order (rule 49 fix).
 
@@ -184,7 +191,7 @@ F8.1–F8.11 are done (see Completed). The list below is the forward path, order
 *Phase A is COMPLETE (A.1–A.4 done). Forward path continues at Phase B.*
 
 #### Phase B — DEPTH (memory & consequences)
-- **B.1 Legacy & mourning**: On soldier death, squadmates get a grief event + opinion about the fallen; graveyard entry gets final stats; replacement soldier arrives with the squad's memory of their predecessor ("you're filling Alpha_2's boots").
+*B.1 is done (bridge side, see Completed). Forward path:*
 - **B.2 Rank progression**: Kills + battles survived → promotion (PVT→PFC→SPC→CPL→SGT). Changes identity, prompt voice, and squadmate opinions. Death resets.
 - **B.3 Mood affects gameplay**: Nervous/panicked soldiers get reduced accuracy or movement delay (game-side modifier based on memory mood) — mood becomes mechanical, not cosmetic.
 - **B.4 Fatigue & session memory**: Long sessions degrade mood/performance; soldiers remember previous deployments (persistent across bridge restarts via existing JSON files).

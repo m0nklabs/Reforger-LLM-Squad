@@ -102,6 +102,7 @@ class SitRepMember(BaseModel):
     order: str = "HOLD"
     sitrep: str = "clear"
     identity: str = ""  # A.4: in-game identity from SCR_CharacterIdentityComponent (name+alias)
+    alive: bool = True   # B.1: game reports a dead member via alive=false (default True: today's SITREPs don't send it)
 
 class SitRepRequest(BaseModel):
     source: str = "game"
@@ -476,6 +477,18 @@ def sanitize_soldier_name(name: str) -> str:
     return name
 
 
+# ─── B.1: Death detection tuning ────────────────────────────────────────
+# A member is only marked dead when the bridge has SOLID evidence:
+# 1. CONFIRMED: the game reports "alive": false for the member (SITREP field).
+# 2. MISSING: the member is absent from death_grace_cycles consecutive thought
+#    cycles. The grace period prevents FALSE KIA during transient squad gaps
+#    (respawn re-link per rule 52, despawn -> re-spawn rebuilds).
+DEATH_GRACE_CYCLES = int(CONFIG.get("game", {}).get("death_grace_cycles", 2))
+# A SITREP gap longer than this means the player disconnected / a new session
+# started. Members of the OLD session must not be treated as dead just because
+# the new session's squad doesn't include them.
+SESSION_GAP_SECONDS = 90
+
 # ─── F8.3: Soldier Tools — agent actions that trigger game logic ───────
 # A soldier's thought JSON may include an optional "tool" block:
 #   {"name": "call_medic", "args": {"target": "Alpha_3"}}
@@ -757,9 +770,15 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
     if leader_state != "alive":
         lines.append(f"LEADER STATUS: {leader_state.upper()}!")
     for m in sitrep.squad:
+        # B.1: mark confirmed-dead members for the adjutant (they are still
+        # listed in the SITREP with alive=false). The LLM should know the
+        # squad is down a soldier - but the dead do not have mood/thoughts.
+        mem = load_soldier_memory(m.name)
+        if not m.alive:
+            lines.append(f"  {m.name}: [KIA - confirmed dead]")
+            continue
         # F8.7: Include soldier mood + last thought so the adjutant LLM
         # (which issues orders) knows how the squad feels, not just positions.
-        mem = load_soldier_memory(m.name)
         mood = mem.get("mood", "")
         last_thought = (mem.get("last_thought") or "")[:80]
         base = f"  {m.name}: order={m.order}, sitrep={m.sitrep}"
@@ -1101,10 +1120,15 @@ def generate_ai_thoughts(event: str = ""):
             log_soldier_event(m.name, "leader_down", "Squad leader was downed!")
 
     # ─── B.1: Replacement soldier detection ────────────────────────────
-    # A member whose memory file says "dead" reappeared in the SITREP: the
-    # game spawned a replacement with the same callsign. Resurrect the file
-    # and record the legacy the new soldier inherits.
+    # A member whose memory file says "dead" reappeared in the SITREP as
+    # ALIVE (alive=true / no alive field): the game spawned a replacement
+    # with the same callsign. Resurrect the file and record the legacy the
+    # new soldier inherits. A member still reported alive=false is NOT a
+    # replacement - they are simply still dead (skip, no resurrect/re-kill
+    # churn every cycle).
     for m in sitrep.squad:
+        if not m.alive:
+            continue
         mem = load_soldier_memory(m.name)
         if mem.get("status") == "dead":
             death_date = str(mem.get("death_date") or "unknown")[:10]
@@ -1121,37 +1145,64 @@ def generate_ai_thoughts(event: str = ""):
             add_battle_event("ORDER", f"Replacement soldier arrived for {m.name}")
             logger.info(f"[B.1] {m.name} is a replacement - legacy recorded")
 
-    # ─── Death detection: check for missing squad members ──────────────
+    # ─── Death detection: two evidence signals ────────────────────────
+    # 1. CONFIRMED: game reports "alive": false for a member -> dead now.
+    # 2. MISSING: absent from DEATH_GRACE_CYCLES consecutive thought cycles.
+    #    (Grace prevents false KIA during transient gaps: respawn re-link
+    #    per rule 52, despawn -> re-spawn rebuilds, partial SITREPs.)
     last_names = set(app_state.get("last_squad_names", []))
-    if last_names:
-        dead_soldiers = last_names - current_names
-        for dead_name in dead_soldiers:
-            mark_soldier_dead(dead_name)
-            # B.1: archive final stats to the graveyard at the moment of death
-            dead_mem = load_soldier_memory(dead_name)
-            archive_path = SOLDIER_GRAVEYARD_DIR / f"{dead_name}.json"
-            try:
-                with open(archive_path, "w", encoding="utf-8") as f:
-                    json.dump(dead_mem, f, indent=2, ensure_ascii=False)
-                logger.info(f"[B.1] {dead_name} archived to graveyard (kills={dead_mem.get('kills', 0)}, battles={dead_mem.get('battles_survived', 0)})")
-            except IOError as e:
-                logger.warning(f"[B.1] graveyard archive failed for {dead_name}: {e}")
-            # Log to surviving soldiers: grief event + relationship + opinion
-            for m in sitrep.squad:
-                log_soldier_event(m.name, "teammate_kia", f"{dead_name} was killed in action")
-                survivor = load_soldier_memory(m.name)
-                survivor["relationships"] = survivor.get("relationships", {})
-                survivor["relationships"][dead_name] = {"score": 6, "label": "mourned"}
-                survivor["opinions"] = survivor.get("opinions", [])
-                opinion = {"topic": f"fallen:{dead_name}", "opinion": f"They mourn {dead_name} - fought alongside them, now they are gone"}
-                if opinion not in survivor["opinions"]:
-                    survivor["opinions"].append(opinion)
-                save_soldier_memory(m.name, survivor)
+    missing = app_state.setdefault("missing_soldiers", {})
+    # A member that is back with us was never gone (reset their counter)
+    for name in list(missing.keys()):
+        if name in current_names:
+            missing.pop(name, None)
+    # Increment counters for everyone known to the session who is absent now.
+    # "known" = previous cycle's squad UNION already-missing members (a member
+    # who dropped out of last_squad_names must still accumulate absence).
+    known = last_names | set(missing.keys())
+    for name in known - current_names:
+        missing[name] = missing.get(name, 0) + 1
+    dead_soldiers = {m.name for m in sitrep.squad if not m.alive} | {
+        name for name, cycles in missing.items() if cycles >= DEATH_GRACE_CYCLES
+    }
+    for dead_name in sorted(dead_soldiers):
+        # Dedup guard: a member marked dead in an earlier cycle (and who may
+        # still appear with alive=false) must not be re-archived / re-grieved.
+        dead_mem = load_soldier_memory(dead_name)
+        if dead_mem.get("status") == "dead":
+            missing.pop(dead_name, None)
+            continue
+        mark_soldier_dead(dead_name)
+        # B.1: archive final stats to the graveyard at the moment of death
+        dead_mem = load_soldier_memory(dead_name)
+        archive_path = SOLDIER_GRAVEYARD_DIR / f"{dead_name}.json"
+        try:
+            with open(archive_path, "w", encoding="utf-8") as f:
+                json.dump(dead_mem, f, indent=2, ensure_ascii=False)
+            logger.info(f"[B.1] {dead_name} archived to graveyard (kills={dead_mem.get('kills', 0)}, battles={dead_mem.get('battles_survived', 0)})")
+        except IOError as e:
+            logger.warning(f"[B.1] graveyard archive failed for {dead_name}: {e}")
+        missing.pop(dead_name, None)
+        # Log to surviving soldiers: grief event + relationship + opinion
+        # (skip the fallen themselves - their file is already archived)
+        for m in sitrep.squad:
+            if m.name == dead_name:
+                continue
+            log_soldier_event(m.name, "teammate_kia", f"{dead_name} was killed in action")
+            survivor = load_soldier_memory(m.name)
+            survivor["relationships"] = survivor.get("relationships", {})
+            survivor["relationships"][dead_name] = {"score": 6, "label": "mourned"}
+            survivor["opinions"] = survivor.get("opinions", [])
+            opinion = {"topic": f"fallen:{dead_name}", "opinion": f"They mourn {dead_name} - fought alongside them, now they are gone"}
+            if opinion not in survivor["opinions"]:
+                survivor["opinions"].append(opinion)
+            save_soldier_memory(m.name, survivor)
     
     app_state["last_squad_names"] = list(current_names)
     
     # F8.4: Update social bonds/opinions from this shared event
-    update_social_bonds(event, list(current_names))
+    # (alive members only - dead ones must keep the "mourned" relationship)
+    update_social_bonds(event, [m.name for m in sitrep.squad if m.alive])
     
     # Cleanup old dead soldier files
     cleanup_dead_soldiers()
@@ -1241,6 +1292,9 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
     # Build member descriptions WITH identity + personal memory + conversation history
     member_lines = []
     for m in sitrep.squad:
+        # B.1: dead members (alive=false) do not generate thoughts
+        if not m.alive:
+            continue
         p = app_state["ai_personalities"].get(m.name, "STEADY")
         identity = get_soldier_identity_summary(m.name)
         backstory = get_soldier_backstory(m.name)
@@ -1318,7 +1372,9 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
     """
     event_brief = event_context.strip().splitlines()[0][:120] if event_context.strip() else "CONTEXT: routine situation"
     thoughts = []
-    for m in sitrep.squad:
+    # B.1: dead members (alive=false) do not generate thoughts
+    live_members = [m for m in sitrep.squad if m.alive]
+    for m in live_members:
         name = m.name
         mem = ensure_soldier_identity(name)
         p = mem.get("personality") or app_state["ai_personalities"].get(name, "STEADY")
@@ -1464,9 +1520,31 @@ async def post_orders(request: Request):
 # =======================================================================
 # /sitrep — GET (query param) or POST (body)
 # =======================================================================
+def _check_session_boundary(now: float = None) -> bool:
+    """Detect a new game session and reset squad state.
+
+    A SITREP gap longer than SESSION_GAP_SECONDS means the player disconnected
+    (no SITREPs are sent while nobody is in the session). When they reconnect,
+    the new session's squad must be treated as a fresh one - members of the
+    previous session must NOT be marked dead just because they are absent.
+    Without this, a reconnect with a different squad composition would
+    false-KIA everyone who didn't come back."""
+    now = now or time.time()
+    prev = app_state.get("last_sitrep_time", now)
+    if app_state["sitrep_count"] > 1 and (now - prev) > SESSION_GAP_SECONDS:
+        app_state["last_squad_names"] = []
+        app_state["missing_soldiers"] = {}
+        logger.info("Session boundary detected (SITREP gap > 90s) - squad state reset")
+        return True
+    return False
+
 @app.get("/sitrep")
 @app.post("/sitrep")
 async def receive_sitrep(request: Request):
+    # B.1: if the previous SITREP is more than a session gap old, a new game
+    # session started - forget the old session's squad (before updating the
+    # timestamp so the gap is measurable).
+    _check_session_boundary()
     app_state["sitrep_count"] += 1
     app_state["last_sitrep_time"] = time.time()
     data = await _get_data(request)
