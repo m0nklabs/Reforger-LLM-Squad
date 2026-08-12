@@ -348,6 +348,66 @@ def test_no_identity_no_block():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Juliet_1.json").unlink(missing_ok=True)
 
 
+def test_death_archives_and_grieves():
+    print("test_death_archives_and_grieves")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_1.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_2.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_2.json").unlink(missing_ok=True)
+    # Kilo_2 has a history (kills/battles) then disappears from the SITREP
+    m2 = bridge.load_soldier_memory("Kilo_2")
+    m2["kills"] = 7
+    m2["battles_survived"] = 3
+    bridge.save_soldier_memory("Kilo_2", m2)
+    bridge.app_state["last_squad_names"] = ["Kilo_1", "Kilo_2"]
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_1"])
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    fake = FakeClient(['{"thought": "Kilo 2 is gone...", "mood": "sad"}'])
+    bridge.client = fake
+    bridge.generate_ai_thoughts("casualty")
+    dead = bridge.load_soldier_memory("Kilo_2")
+    check("Kilo_2 marked dead", dead.get("status") == "dead" and dead.get("death_date"))
+    g = bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_2.json"
+    check("graveyard archive exists with final stats", g.exists() and json.load(open(g, encoding="utf-8")).get("kills") == 7)
+    surv = bridge.load_soldier_memory("Kilo_1")
+    check("survivor mourns relationship", surv.get("relationships", {}).get("Kilo_2", {}).get("label") == "mourned")
+    check("survivor has grief opinion", any("fallen:Kilo_2" in o.get("topic", "") for o in surv.get("opinions", [])))
+    check("survivor logged kia event", any(e.get("type") == "teammate_kia" for e in surv.get("events", [])))
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_1.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_2.json").unlink(missing_ok=True)
+    bridge.SOLDIER_GRAVEYARD_DIR.joinpath("Kilo_2.json").unlink(missing_ok=True)
+
+
+def test_replacement_resurrection_and_legacy():
+    print("test_replacement_resurrection_and_legacy")
+    (bridge.SOLDIER_MEMORY_DIR / "Lima_1.json").unlink(missing_ok=True)
+    m = bridge.load_soldier_memory("Lima_1")
+    m["status"] = "dead"
+    m["death_date"] = "2026-08-01T12:00:00"
+    m["kills"] = 4
+    m["battles_survived"] = 2
+    bridge.save_soldier_memory("Lima_1", m)
+    bridge.app_state["last_squad_names"] = []
+    bridge.app_state["last_sitrep"] = make_sitrep(["Lima_1"])
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    fake = FakeClient(['{"thought": "Big boots to fill", "mood": "calm"}'])
+    bridge.client = fake
+    bridge.generate_ai_thoughts("idle")
+    mem = bridge.load_soldier_memory("Lima_1")
+    check("replacement resurrected", mem.get("status") == "alive" and mem.get("death_date") is None)
+    check("legacy recorded with predecessor stats", "filling their boots" in (mem.get("legacy") or "") and "4" in (mem.get("legacy") or ""))
+    check("replacement event logged", any(e.get("type") == "replacement" for e in mem.get("events", [])))
+    # legacy must reach the per-soldier system prompt
+    fake2 = FakeClient(['{"thought": "Still filling boots", "mood": "calm"}'])
+    bridge.client = fake2
+    bridge._generate_thoughts_per_soldier(make_sitrep(["Lima_1"]), "Situation:\nquiet.", "")
+    check("legacy in system prompt", "Legacy:" in fake2.calls[0][0]["content"] and "filling their boots" in fake2.calls[0][0]["content"])
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Lima_1.json").unlink(missing_ok=True)
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -375,6 +435,9 @@ def run_tests():
     print("=== A.4 identity integration unit tests ===")
     test_identity_fed_into_system_prompt()
     test_no_identity_no_block()
+    print("=== B.1 legacy & mourning unit tests ===")
+    test_death_archives_and_grieves()
+    test_replacement_resurrection_and_legacy()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()

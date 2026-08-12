@@ -679,6 +679,8 @@ def get_social_summary(name: str) -> str:
     if rels:
         rel_parts = []
         for other, entry in rels.items():
+            if not isinstance(entry, dict):  # drift guard: old files may store bare strings
+                continue
             if entry.get("label") and entry["label"] != "unknown":
                 rel_parts.append(f"{other}: {entry['label']}")
         if rel_parts:
@@ -1098,15 +1100,53 @@ def generate_ai_thoughts(event: str = ""):
         elif event == "leader_downed":
             log_soldier_event(m.name, "leader_down", "Squad leader was downed!")
 
+    # ─── B.1: Replacement soldier detection ────────────────────────────
+    # A member whose memory file says "dead" reappeared in the SITREP: the
+    # game spawned a replacement with the same callsign. Resurrect the file
+    # and record the legacy the new soldier inherits.
+    for m in sitrep.squad:
+        mem = load_soldier_memory(m.name)
+        if mem.get("status") == "dead":
+            death_date = str(mem.get("death_date") or "unknown")[:10]
+            kills = mem.get("kills", 0)
+            battles = mem.get("battles_survived", 0)
+            mem["status"] = "alive"
+            mem["death_date"] = None
+            mem["legacy"] = (
+                f"The previous {m.name} was KIA on {death_date} with {kills} confirmed kill(s) "
+                f"after {battles} battle(s). The squad remembers them - you are filling their boots."
+            )
+            save_soldier_memory(m.name, mem)
+            log_soldier_event(m.name, "replacement", f"Replacement soldier takes over {m.name} - predecessor KIA")
+            add_battle_event("ORDER", f"Replacement soldier arrived for {m.name}")
+            logger.info(f"[B.1] {m.name} is a replacement - legacy recorded")
+
     # ─── Death detection: check for missing squad members ──────────────
     last_names = set(app_state.get("last_squad_names", []))
     if last_names:
         dead_soldiers = last_names - current_names
         for dead_name in dead_soldiers:
             mark_soldier_dead(dead_name)
-            # Log to surviving soldiers
+            # B.1: archive final stats to the graveyard at the moment of death
+            dead_mem = load_soldier_memory(dead_name)
+            archive_path = SOLDIER_GRAVEYARD_DIR / f"{dead_name}.json"
+            try:
+                with open(archive_path, "w", encoding="utf-8") as f:
+                    json.dump(dead_mem, f, indent=2, ensure_ascii=False)
+                logger.info(f"[B.1] {dead_name} archived to graveyard (kills={dead_mem.get('kills', 0)}, battles={dead_mem.get('battles_survived', 0)})")
+            except IOError as e:
+                logger.warning(f"[B.1] graveyard archive failed for {dead_name}: {e}")
+            # Log to surviving soldiers: grief event + relationship + opinion
             for m in sitrep.squad:
                 log_soldier_event(m.name, "teammate_kia", f"{dead_name} was killed in action")
+                survivor = load_soldier_memory(m.name)
+                survivor["relationships"] = survivor.get("relationships", {})
+                survivor["relationships"][dead_name] = {"score": 6, "label": "mourned"}
+                survivor["opinions"] = survivor.get("opinions", [])
+                opinion = {"topic": f"fallen:{dead_name}", "opinion": f"They mourn {dead_name} - fought alongside them, now they are gone"}
+                if opinion not in survivor["opinions"]:
+                    survivor["opinions"].append(opinion)
+                save_soldier_memory(m.name, survivor)
     
     app_state["last_squad_names"] = list(current_names)
     
@@ -1209,12 +1249,14 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         social = get_social_summary(m.name)  # F8.4: relationships + opinions
         chatter = get_squadmate_recent_thoughts(sitrep, m.name)  # A.2
         last_result = load_soldier_memory(m.name).get("last_tool_result")  # A.3
+        legacy = load_soldier_memory(m.name).get("legacy")  # B.1
         member_lines.append(
             f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
             f"{social}\n"
             f"  Own recent thoughts:\n{own_thoughts}\n"
             + (f"  Squadmate chatter heard:\n{chatter}\n" if chatter else "")
             + (f"  Last action result: {last_result}\n" if last_result else "")
+            + (f"  Legacy: {legacy}\n" if legacy else "")
             + f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
 
@@ -1296,6 +1338,10 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
             # GetFormattedFullName on the game side) - grounds the persona in
             # what the character is actually named in the world.
             system_content += "\n\nIn-game identity (military records): " + m.identity
+        legacy = mem.get("legacy")
+        if legacy:
+            # B.1: replacement soldier - carries the predecessor's memory
+            system_content += f"\n\nLegacy: {legacy}"
 
         # Own conversation history (last 6 exchanges = 12 messages) as real chat turns
         conv = [c for c in mem.get("conversation", []) if isinstance(c, dict) and c.get("role")]
