@@ -388,6 +388,7 @@ def get_soldier_backstory(name: str) -> str:
 
 def log_soldier_thought(name: str, thought: str, mood: str):
     """F8.1: Append a soldier's own thought to their conversation history."""
+    name = sanitize_soldier_name(name)
     mem = load_soldier_memory(name)
     mem["last_thought"] = thought
     mem["mood"] = mood or mem.get("mood", "neutral")
@@ -395,6 +396,17 @@ def log_soldier_thought(name: str, thought: str, mood: str):
     hist.append({"time": datetime.now().isoformat(), "thought": thought})
     mem["thought_history"] = hist[-10:]  # rolling window of 10
     save_soldier_memory(name, mem)
+
+
+def sanitize_soldier_name(name: str) -> str:
+    """Strip rank prefixes the LLM sometimes prepends ("CPL Alpha_1" -> "Alpha_1").
+    Keeps the canonical callsign so memory files stay consistent."""
+    name = (name or "").strip()
+    # Known rank tokens that may prefix a callsign
+    for token in ("PVT ", "PFC ", "SPC ", "CPL ", "SGT ", "SSG "):
+        if name.startswith(token):
+            return name[len(token):].strip()
+    return name
 
 
 # ─── F8.3: Soldier Tools — agent actions that trigger game logic ───────
@@ -857,7 +869,10 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
         if not content or not content.strip():
             logger.error("LLM returned empty content")
             return SitRepResponse(status="ok", action="HOLD", target_offset=None, voice_reply="")
-        data = json.loads(content)
+        data = extract_json_block(content)
+        if not data:
+            logger.error(f"LLM returned unparseable JSON: {content[:100]!r}")
+            return SitRepResponse(status="ok", action="HOLD", target_offset=None, voice_reply="")
         to = data.get("target_offset", None)
         if isinstance(to, str):
             try: to = json.loads(to)
@@ -866,8 +881,6 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
     except Exception as e2:
         logger.error(f"LLM call failed: {e2}")
         app_state["errors"] += 1
-        return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
-
         return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
 
 # =======================================================================
@@ -1071,7 +1084,7 @@ def generate_ai_thoughts(event: str = ""):
             # F8.1: Store each soldier's thought in their personal conversation history
             # F8.3: Process optional tool calls (report_contact, call_medic, suggest_tactic...)
             for t in thoughts:
-                tname = t.get("name", "?")
+                tname = sanitize_soldier_name(t.get("name", "?"))
                 tthought = t.get("thought", "")
                 tmood = t.get("mood", "neutral")
                 log_soldier_thought(tname, tthought, tmood)
@@ -1277,8 +1290,6 @@ async def receive_waypoint(request: Request):
         app_state["last_waypoint"] = data
     return {"status": "ok", "timestamp": time.time()}
 
-    return {"status": "ok", "timestamp": time.time()}
-
 # =======================================================================
 # /ai_thought — F2.7: Individual AI Brains
 # =======================================================================
@@ -1366,7 +1377,11 @@ def generate_stavka_orders(opfor_count: int = -1):
         )
         content = response.choices[0].message.content if response.choices else ""
         if content and content.strip():
-            data = json.loads(content)
+            data = extract_json_block(content)
+            if not data:
+                logger.warning(f"Stavka: unparseable LLM output: {content[:80]!r}")
+                app_state["errors"] += 1
+                return {"orders": []}
             orders = data.get("orders", [])
             result = {"orders": orders}
             app_state["cached_stavka_orders"] = result
@@ -1438,6 +1453,10 @@ async def startup_event():
     if voice_handler.enabled:
         started = voice_handler.start()
         logger.info(f"Voice handler start result: {started}")
+
+    # Phase 3 fix: TTS was configured but never started (start() never called,
+    # so speak() short-circuited on _running=False and ALL squad audio was silent).
+    tts_handler.start()
 
 
 

@@ -211,13 +211,16 @@ class LLMBridge
 		m_fTime += timeslice;
 
 		m_fSITREPTimer += timeslice;
-		// Shift tracking vars: previous cycle becomes "last"
-		m_iLastEnemyCount = m_iCurrentEnemyCount;
-		m_sLastLLMAction = m_sCurrentLLMAction;
-		m_iLastSquadCount = m_iCurrentSquadCount;
+		// NOTE: "last" tracking vars are shifted ONLY when a new SITREP is sent.
+		// Shifting every frame would overwrite the previous value before the async
+		// REST callback arrives (which updates "current"), so change detection
+		// (contact/clear/casualty/order_change) would never fire.
 		if (m_fSITREPTimer >= m_fSITREPInterval)
 		{
 			m_fSITREPTimer = 0;
+			m_iLastEnemyCount = m_iCurrentEnemyCount;
+			m_sLastLLMAction = m_sCurrentLLMAction;
+			m_iLastSquadCount = m_iCurrentSquadCount;
 			SendSITREP();
 		}
 
@@ -485,8 +488,13 @@ class LLMBridge
 			ClearSquadWaypoints();
 			Print("[LLMBridge] HOLD order executed");
 		}
-		else if (cmd == "move")
+		else if (cmd == "move" || cmd == "engage" || cmd == "attack" || cmd == "suppress" || cmd == "flank" || cmd == "retreat")
 		{
+			// NOTE: voice pipeline sends action.lower() (engage/suppress/flank/retreat) —
+			// treat them as movement orders with the same offset parsing as "move".
+			string moveAction = "MOVE";
+			if (cmd == "engage" || cmd == "attack" || cmd == "suppress" || cmd == "flank")
+				moveAction = "ATTACK";
 			vector offset = "0 0 0";
 			bool hasOffset = false;
 			int offIdx = sData.IndexOf("\"offset\"");
@@ -494,7 +502,9 @@ class LLMBridge
 			{
 				int offColon = sData.IndexOfFrom(offIdx, ":");
 				int arrStart = sData.IndexOfFrom(offColon, "[");
-				int arrEnd = sData.IndexOfFrom(arrStart, "]");
+				int arrEnd = -1;
+				if (arrStart >= 0)  // guard: don't search from -1 (crash risk)
+					arrEnd = sData.IndexOfFrom(arrStart, "]");
 				if (arrStart >= 0 && arrEnd >= 0)
 				{
 					string arrStr = sData.Substring(arrStart + 1, arrEnd - arrStart - 1);
@@ -519,12 +529,12 @@ class LLMBridge
 				vector targetPos = squadPos;
 				targetPos[0] = squadPos[0] + offset[0];
 				targetPos[2] = squadPos[2] + offset[2];
-				Print("[LLMBridge] MOVE: squad=" + squadPos + " + offset=" + offset + " = " + targetPos);
-				ExecuteWaypoint("MOVE", targetPos);
+				Print("[LLMBridge] " + moveAction + ": squad=" + squadPos + " + offset=" + offset + " = " + targetPos);
+				ExecuteWaypoint(moveAction, targetPos);
 			}
 			else
 			{
-				Print("[LLMBridge] MOVE order but no offset provided");
+				Print("[LLMBridge] " + moveAction + " order but no offset provided");
 			}
 		}
 		else if (cmd == "status")
@@ -567,7 +577,9 @@ class LLMBridge
 			{
 				int formColon = sData.IndexOfFrom(formIdx, ":");
 				int formStart = sData.IndexOfFrom(formColon, "\"");
-				int formEnd = sData.IndexOfFrom(formStart + 1, "\"");
+				int formEnd = -1;
+				if (formStart >= 0)  // guard: don't search from formStart+1=0 (wrong match)
+					formEnd = sData.IndexOfFrom(formStart + 1, "\"");
 				if (formStart >= 0 && formEnd >= 0)
 					formName = sData.Substring(formStart + 1, formEnd - formStart - 1);
 			}
@@ -580,6 +592,15 @@ class LLMBridge
 			vector leaderPos = GetSquadPosition();
 			Print("[LLMBridge] FOLLOW: creating follow waypoint at " + leaderPos);
 			ExecuteWaypoint("FOLLOW", leaderPos);
+		}
+		else if (cmd == "medic")
+		{
+			// F8.3: Soldier tool call_medic queues this order — emergency rescue,
+			// squad moves to the downed leader position (same logic as MEDIC action)
+			SetAllOrders("MEDIC");
+			vector medicPos = GetSquadPosition();
+			Print("[LLMBridge] MEDIC: soldier tool triggered rescue at " + medicPos);
+			ExecuteWaypoint("FOLLOW", medicPos);
 		}
 		else if (cmd == "mount")
 		{
@@ -913,21 +934,29 @@ class LLMBridge
 	//------------------------------------------------------------------------------------------------
 	// F8.3: Parse optional "tool" field from a thought JSON object.
 	// Returns empty string if no tool. Tool block: {"name": "call_medic", "args": {...}}
+	// BUGFIX: the search is bounded to the CURRENT object (first '}' after the
+	// thought) so a tool from a LATER thought can't be misattributed to this one.
 	string ExtractThoughtTool(string sData, int scanFrom, out int scanEnd)
 	{
 		scanEnd = scanFrom;
+
+		// Find the end of the current thought object: first '}' after scanFrom
+		int objEnd = sData.IndexOfFrom(scanFrom, "}");
+		if (objEnd < 0) return "";
+
+		// Only search for "tool" within this object's span
 		int toolIdx = sData.IndexOfFrom(scanFrom, "\"tool\"");
-		if (toolIdx < 0) return "";
+		if (toolIdx < 0 || toolIdx > objEnd) return "";
 
 		// Find tool name (first string value after "tool")
 		int nameIdx = sData.IndexOfFrom(toolIdx, "\"name\"");
-		if (nameIdx < 0) return "";
+		if (nameIdx < 0 || nameIdx > objEnd) return "";
 		int colon = sData.IndexOfFrom(nameIdx, ":");
 		if (colon < 0) return "";
 		int start = sData.IndexOfFrom(colon, "\"");
 		if (start < 0) return "";
 		int end = sData.IndexOfFrom(start + 1, "\"");
-		if (end < 0) return "";
+		if (end < 0 || end > objEnd) return "";
 		scanEnd = end + 1;
 		return sData.Substring(start + 1, end - start - 1);
 	}
