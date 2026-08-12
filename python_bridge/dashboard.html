@@ -139,6 +139,17 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 /* Empty states */
 .empty-state{text-align:center;color:var(--text-muted);font-size:12px;padding:16px;font-style:italic}
 
+/* C.5: CO suggestions panel */
+.suggestion-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:4px;border-left:3px solid var(--warning)}
+.suggestion-item.done{opacity:0.55;border-left-color:var(--border-light)}
+.suggestion-item .s-who{font-weight:600;font-size:11px;flex:1}
+.suggestion-item .s-what{font-size:11px;color:var(--text-secondary)}
+.suggestion-item .s-actions{display:flex;gap:4px}
+.suggestion-item button{font-size:10px;padding:2px 8px;border-radius:3px;cursor:pointer}
+.suggestion-item .btn-accept{background:var(--success);color:#fff;border:none}
+.suggestion-item .btn-reject{background:var(--danger);color:#fff;border:none}
+.suggestion-item .s-status{font-size:9px;text-transform:uppercase;font-weight:600}
+
 /* Loading spinner */
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border-light);border-top-color:var(--accent);border-radius:50%;animation:spin 0.6s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -317,6 +328,16 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 
   <!-- ====== RIGHT SIDEBAR — THOUGHTS & ROSTER ====== -->
   <aside class="right-sidebar">
+    <!-- C.5: Soldier tactic suggestions awaiting CO approval -->
+    <div class="section-title">CO Suggestions <span style="font-size:10px;color:var(--text-muted)">(soldier ideas)</span>
+      <button onclick="acceptAllSuggestions()" style="float:right;font-size:10px;padding:1px 8px">Accept All</button>
+    </div>
+    <div id="suggestionsList">
+      <div class="empty-state">No suggestions yet.</div>
+    </div>
+
+    <div class="divider"></div>
+
     <!-- AI Thoughts -->
     <div class="section-title">AI Soldier Thoughts</div>
     <div id="thoughtsList">
@@ -423,6 +444,75 @@ function customMove(){
 function setFormation(){
   const form = document.getElementById('formationSelect').value;
   sendOrder({cmd:'formation', formation: form});
+}
+
+// ====== C.5: CO Suggestions ======
+async function decideSuggestion(id, action){
+  try{
+    const resp = await fetch(API_BASE + '/suggestions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: id, action: action})
+    });
+    if(resp.ok){
+      const data = await resp.json();
+      toast(action === 'accept' ? 'Suggestion #' + id + ' APPROVED - order queued' : 'Suggestion #' + id + ' rejected', action === 'accept' ? 'success' : 'info');
+      pollSuggestions();
+    } else {
+      toast('Suggestion action failed: ' + resp.status, 'error');
+    }
+  } catch(e){
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+async function acceptAllSuggestions(){
+  try{
+    const resp = await fetch(API_BASE + '/suggestions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'accept_all'})
+    });
+    if(resp.ok){
+      const data = await resp.json();
+      toast('Approved ' + (data.accepted || 0) + ' suggestion(s)', 'success');
+      pollSuggestions();
+    }
+  } catch(e){
+    toast('Network error: ' + e.message, 'error');
+  }
+}
+
+async function pollSuggestions(){
+  try{
+    const resp = await fetch(API_BASE + '/suggestions');
+    if(!resp.ok) return;
+    const data = await resp.json();
+    const list = document.getElementById('suggestionsList');
+    const sugs = data.suggestions || [];
+    if(sugs.length === 0){
+      list.innerHTML = '<div class="empty-state">No suggestions yet.</div>';
+      return;
+    }
+    list.innerHTML = sugs.map(s => {
+      const pending = s.status === 'pending';
+      const dir = s.direction ? ' heading ' + s.direction : '';
+      return '<div class="suggestion-item' + (pending ? '' : ' done') + '">' +
+        '<div style="flex:1">' +
+          '<div class="s-who">' + esc(s.soldier || '?') + ' <span class="s-what">suggests ' + esc(s.formation || '?') + dir + '</span></div>' +
+          '<div class="s-status">' + (pending ? '⏳ pending' : esc(s.status)) + '</div>' +
+        '</div>' +
+        (pending ? '<div class="s-actions">' +
+          '<button class="btn-accept" onclick="decideSuggestion(' + s.id + ',\'accept\')">✓</button>' +
+          '<button class="btn-reject" onclick="decideSuggestion(' + s.id + ',\'reject\')">✗</button>' +
+        '</div>' : '') +
+      '</div>';
+    }).join('');
+  } catch(e){ /* dashboard keeps polling */ }
+}
+
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ====== Poll /health ======
@@ -740,6 +830,8 @@ setInterval(pollHealth, POLL_HEALTH_MS);
 setInterval(pollStatus, POLL_STATUS_MS);
 setInterval(pollSoldiers, POLL_SOLDIERS_MS);
 setInterval(pollVoice, 5000);
+setInterval(pollSuggestions, 5000);
+pollSuggestions();
 </script>
 </body>
 </html>

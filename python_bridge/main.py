@@ -13,6 +13,9 @@ import os
 import math
 import logging
 import traceback
+import re
+import random
+import asyncio
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
@@ -259,6 +262,119 @@ def update_soldier_fatigue(squad) -> dict:
         save_soldier_memory(m.name, mem)
         logger.info(f"[B.4] {m.name} fatigue -> {fatigue['label']} ({fatigue['minutes']:.0f} min)")
     return fatigue
+
+
+# ─── C.2: Radio chatter layer ─────────────────────────────────────────
+# During quiet periods (session active, no recent contacts, no pending
+# orders) the squad randomly "talks" over the radio via TTS — short patrol
+# lines from a pool, voiced by a random squad member. Pure audio ambience;
+# deliberately NOT written to soldier memory files (background noise, not
+# conversation). The gating decision lives in _chatter_due() (pure, unit
+# tested); _chatter_loop() is the asyncio task driving it.
+
+CHATTER_LINES = [
+    "{name}, all callsigns — sector's quiet, keep your eyes open.",
+    "{name}, holding position, waiting on orders.",
+    "{name}, anyone got eyes on the treeline?",
+    "{name}, ammo check — I'm good over here.",
+    "{name}, nice and steady, watch your spacing.",
+    "{name}, did a sweep of the area, nothing moving.",
+    "{name}, stay sharp, could be lurkers out here.",
+    "{name}, copy all. Radio discipline, everyone.",
+]
+
+CHATTER_BATTLE_MARKERS = ("CONTACT", "CRITICAL", "DOWN")
+
+
+def _battle_event_age_seconds(log_entry: str) -> float:
+    """Age of a battle-log entry (parses the [HH:MM:SS] prefix).
+    Events from a previous day (negative age) count as old: clamp high."""
+    m = re.match(r"\[(\d{2}):(\d{2}):(\d{2})\]", log_entry)
+    if not m:
+        return 0.0
+    lt = time.localtime()
+    evt = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                       int(m.group(1)), int(m.group(2)), int(m.group(3)), 0, 0, -1))
+    age = time.time() - evt
+    if age < 0:
+        return 3600.0  # yesterday's event: long ago
+    return age
+
+
+def _chatter_member() -> str:
+    """Random ALIVE squad member from the last SITREP (fallback Alpha_1..5)."""
+    sitrep = app_state.get("last_sitrep")
+    names = []
+    if sitrep and sitrep.squad:
+        names = [m.name for m in sitrep.squad if m.alive]
+    if not names:
+        names = [f"Alpha_{i}" for i in range(1, 6)]
+    return random.choice(names)
+
+
+def _chatter_line() -> tuple:
+    """A random chatter line + the speaker's name (name formatted for TTS)."""
+    name = _chatter_member()
+    line = random.choice(CHATTER_LINES).format(name=name.replace("_", " "))
+    return line, name
+
+
+def _chatter_due(now: float = None) -> tuple:
+    """C.2: (due, reason) — should the chatter loop speak right now?
+    Pure decision function so the gating rules are unit-testable."""
+    now = now if now is not None else time.time()
+    if not tts_handler.enabled:
+        return False, "tts_disabled"
+    if (now - app_state.get("last_sitrep_time", 0)) > 90:
+        return False, "no_session"
+    if now < app_state.get("chatter_next_at", 0):
+        return False, "not_yet"
+    if app_state.get("pending_orders"):
+        return False, "orders_pending"
+    quiet = float((CONFIG.get("chatter") or {}).get("quiet_seconds", 30))
+    for e in app_state.get("battle_log", []):
+        if any(t in e for t in CHATTER_BATTLE_MARKERS):
+            if _battle_event_age_seconds(e) < quiet:
+                return False, "recent_battle"
+    return True, "quiet"
+
+
+async def _chatter_loop():
+    """C.2: background task — speak radio chatter during quiet periods."""
+    cfg = CONFIG.get("chatter") or {}
+    if not cfg.get("enabled", True):
+        logger.info("[C.2] Radio chatter disabled in config")
+        return
+    if not tts_handler.enabled:
+        logger.info("[C.2] Radio chatter disabled: TTS not enabled")
+        return
+    min_int = float(cfg.get("min_interval_seconds", 45))
+    max_int = float(cfg.get("max_interval_seconds", 150))
+    max_per_session = int(cfg.get("max_per_session", 12))
+    logger.info(f"[C.2] Radio chatter loop started (every {min_int:.0f}-{max_int:.0f}s while quiet)")
+    while True:
+        await asyncio.sleep(5)
+        try:
+            now = time.time()
+            due, reason = _chatter_due(now)
+            if not due:
+                # No session: re-arm for a fresh session so the squad does not
+                # chatter the moment someone connects.
+                if reason == "no_session":
+                    app_state["chatter_next_at"] = now + random.uniform(min_int, max_int)
+                continue
+            if app_state.get("chatter_count", 0) >= max_per_session:
+                app_state["chatter_next_at"] = now + 3600  # stay silent till next session
+                continue
+            line, name = _chatter_line()
+            tts_handler.speak(line, member_index=_name_hash(name, "voice") % 10, member_name=name)
+            app_state["chatter_count"] = app_state.get("chatter_count", 0) + 1
+            app_state["last_chatter"] = {"text": line[:80], "time": now, "member": name}
+            app_state["chatter_next_at"] = now + random.uniform(min_int, max_int)
+            logger.info(f"[C.2] Chatter #{app_state['chatter_count']} ({name}): {line[:60]}...")
+        except Exception as e:
+            logger.warning(f"[C.2] chatter loop error: {e}")
+            app_state["errors"] = app_state.get("errors", 0) + 1
 
 
 # ─── B.5: After-action report ──────────────────────────────────────────
@@ -799,8 +915,20 @@ def handle_soldier_tool(name: str, tool: dict) -> str:
         formation = args.get("formation", "Line")
         direction = args.get("direction", "")
         add_battle_event("ORDER", f"{name} suggests {formation} formation" + (f" heading {direction}" if direction else ""))
-        app_state["pending_orders"].append({"cmd": "formation", "formation": formation, "source": f"soldier:{name}"})
-        result += f" -> {formation} formation order queued"
+        # C.5: tactic suggestions go to the CO (dashboard) for APPROVAL instead
+        # of auto-executing - the player stays in command. On approval the
+        # formation order is queued for the game.
+        sid = app_state.get("suggestion_counter", 0) + 1
+        app_state["suggestion_counter"] = sid
+        app_state.setdefault("pending_suggestions", []).append({
+            "id": sid,
+            "time": time.strftime("%H:%M:%S"),
+            "soldier": name,
+            "formation": formation,
+            "direction": direction,
+            "status": "pending",
+        })
+        result += f" -> {formation} formation suggested to CO for approval"
         logger.info(f"[TOOL] {result}")
 
     else:
@@ -971,6 +1099,11 @@ app_state = {
     "last_report_summary": None,        # B.5: previous deployment recap for prompts
     "last_report_path": None,           # B.5: most recent report file
     "fatigue": {"level": 0, "label": "fresh", "minutes": 0.0},  # B.4: current squad fatigue
+    # C.2: radio chatter layer (ambience TTS during quiet periods)
+    "chatter_count": 0,             # chatter utterances this session
+    "last_chatter": None,           # {"text", "time", "member"}
+    "chatter_next_at": 0.0,         # earliest next chatter time
+    "chatter_task": None,           # asyncio task handle (avoid GC)
     # F5: Battle Memory — rolling event log for LLM context
     "battle_log": [],                # last 15 events, included in LLM prompts
     "last_leader_state": "alive",
@@ -981,6 +1114,9 @@ app_state = {
     # E.3: rolling trace of the last 10 bridge errors (source + traceback),
     # exposed via /health for diagnosis without digging through logs
     "recent_errors": [],
+    # C.5: soldier tactic suggestions awaiting CO approval (dashboard)
+    "pending_suggestions": [],
+    "suggestion_counter": 0,
 }
 
 def _record_error(source: str, exc: BaseException):
@@ -1817,7 +1953,17 @@ async def get_dashboard():
 # =======================================================================
 @app.get("/tts")
 async def tts_status():
-    return tts_handler.get_status()
+    status = tts_handler.get_status()
+    # C.2: chatter layer status for the dashboard / operator checks
+    last_chatter = app_state.get("last_chatter") or {}
+    status["chatter"] = {
+        "enabled": bool((CONFIG.get("chatter") or {}).get("enabled", True)) and tts_handler.enabled,
+        "count": app_state.get("chatter_count", 0),
+        "last": last_chatter.get("text", ""),
+        "last_member": last_chatter.get("member", ""),
+        "last_age": round(time.time() - last_chatter["time"], 1) if last_chatter.get("time") else None,
+    }
+    return status
 
 # =======================================================================
 # /orders — LIVE command queue (F2.x: debug without game restart)
@@ -1871,6 +2017,9 @@ def _check_session_boundary(now: float = None) -> bool:
         app_state["last_squad_names"] = []
         app_state["missing_soldiers"] = {}
         app_state["session_had_members"] = False
+        # C.2: chatter budget belongs to one session
+        app_state["chatter_count"] = 0
+        app_state["last_chatter"] = None
         logger.info("Session boundary detected (SITREP gap > 90s) - squad state reset")
         return True
     return False
@@ -2128,6 +2277,65 @@ async def get_stavka(opfor: int = -1):
 async def voice_status():
     return voice_handler.get_status()
 
+def _approve_suggestion(s: dict):
+    """C.5: CO approved a soldier's tactic suggestion -> queue the real order."""
+    s["status"] = "approved"
+    app_state["pending_orders"].append({
+        "cmd": "formation",
+        "formation": s.get("formation", "Line"),
+        "source": f"soldier:{s.get('soldier')} (CO approved)",
+    })
+    add_battle_event("ORDER", f"CO approved {s.get('soldier')}'s suggestion: {s.get('formation')} formation")
+    logger.info(f"[C.5] Suggestion #{s.get('id')} APPROVED by CO -> formation order queued")
+
+
+# =======================================================================
+# /suggestions — C.5: soldier tactic suggestions awaiting CO approval
+# GET  /suggestions                -> all suggestions (pending + recent)
+# POST /suggestions {"id": 1, "action": "accept"|"reject"}
+# POST /suggestions {"action": "accept_all"}
+# =======================================================================
+@app.get("/suggestions")
+async def get_suggestions():
+    return {"suggestions": app_state.get("pending_suggestions", [])}
+
+@app.post("/suggestions")
+async def post_suggestions(request: Request):
+    data = await _get_data(request)
+    if not data:
+        return {"status": "error", "msg": "no data"}
+    action = data.get("action", "")
+    suggestions = app_state.setdefault("pending_suggestions", [])
+    if action == "accept_all":
+        accepted = [s for s in suggestions if s.get("status") == "pending"]
+        for s in accepted:
+            _approve_suggestion(s)
+        _trim_suggestions()
+        return {"status": "ok", "accepted": len(accepted)}
+    sid = data.get("id")
+    for s in suggestions:
+        if s.get("id") == sid:
+            if action == "accept":
+                _approve_suggestion(s)
+            elif action == "reject":
+                s["status"] = "rejected"
+                add_battle_event("ORDER", f"CO rejected {s.get('soldier')}'s suggestion ({s.get('formation')})")
+                logger.info(f"[C.5] Suggestion #{sid} REJECTED by CO")
+            else:
+                return {"status": "error", "msg": f"unknown action: {action}"}
+            _trim_suggestions()
+            return {"status": "ok", "suggestion": s}
+    return {"status": "error", "msg": f"suggestion {sid} not found"}
+
+
+def _trim_suggestions():
+    """Keep all pending suggestions + the 5 most recent decided ones."""
+    sugs = app_state.get("pending_suggestions", [])
+    pending = [s for s in sugs if s.get("status") == "pending"]
+    decided = [s for s in sugs if s.get("status") != "pending"][-5:]
+    app_state["pending_suggestions"] = pending + decided
+
+
 async def _get_data(request: Request) -> dict:
     raw = await request.body()
     if raw:
@@ -2180,6 +2388,10 @@ async def startup_event():
     # Phase 3 fix: TTS was configured but never started (start() never called,
     # so speak() short-circuited on _running=False and ALL squad audio was silent).
     tts_handler.start()
+
+    # C.2: start the radio chatter loop (background ambience TTS)
+    app_state["chatter_next_at"] = time.time() + 30.0
+    app_state["chatter_task"] = asyncio.create_task(_chatter_loop())
 
 
 

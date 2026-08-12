@@ -752,6 +752,33 @@ def test_error_surfacing():
     bridge.app_state["errors"] = 0
 
 
+def test_suggestion_approval_flow():
+    print("test_suggestion_approval_flow")
+    bridge.app_state["pending_suggestions"] = []
+    bridge.app_state["suggestion_counter"] = 0
+    bridge.app_state["pending_orders"] = []
+    # 1. suggest_tactic no longer auto-executes - it submits for approval
+    result = bridge.handle_soldier_tool("Alpha_1", {"name": "suggest_tactic", "args": {"formation": "Wedge", "direction": "NE"}})
+    check("no auto-executed order", bridge.app_state["pending_orders"] == [])
+    sugs = bridge.app_state["pending_suggestions"]
+    check("suggestion submitted pending", len(sugs) == 1 and sugs[0]["status"] == "pending" and sugs[0]["formation"] == "Wedge" and sugs[0]["soldier"] == "Alpha_1")
+    check("result mentions CO approval", "CO" in result and "approval" in result)
+    # 2. CO approves -> the real order is queued
+    bridge._approve_suggestion(sugs[0])
+    check("accept queues formation order", bridge.app_state["pending_orders"] == [{"cmd": "formation", "formation": "Wedge", "source": "soldier:Alpha_1 (CO approved)"}])
+    check("suggestion marked approved", sugs[0]["status"] == "approved")
+    # 3. second suggestion stays pending until decided
+    bridge.handle_soldier_tool("Alpha_2", {"name": "suggest_tactic", "args": {"formation": "Line"}})
+    check("second suggestion pending", bridge.app_state["pending_suggestions"][-1]["status"] == "pending")
+    check("no order from undecided suggestion", bridge.app_state["pending_orders"] == [{"cmd": "formation", "formation": "Wedge", "source": "soldier:Alpha_1 (CO approved)"}])
+    # 4. trim keeps pending + recent decided, drops old decided
+    bridge.app_state["pending_suggestions"][-1]["status"] = "rejected"
+    bridge._trim_suggestions()
+    check("trim keeps pending + decided", len(bridge.app_state["pending_suggestions"]) == 2)
+    bridge.app_state["pending_suggestions"] = []
+    bridge.app_state["pending_orders"] = []
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -798,6 +825,8 @@ def run_tests():
     test_report_summary_in_prompts()
     print("=== E.3 error surfacing unit tests ===")
     test_error_surfacing()
+    print("=== C.5 suggestion approval flow unit tests ===")
+    test_suggestion_approval_flow()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()
