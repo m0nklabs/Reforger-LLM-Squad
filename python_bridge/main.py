@@ -476,6 +476,114 @@ def get_soldier_thought_history(name: str, max_items: int = 3) -> str:
     return "\n".join(f"- earlier: {h.get('thought', '')}" for h in hist)
 
 
+# ─── F8.4: Social dynamics — bonds & opinions between squadmates ───────
+# Relationships evolve from shared experiences (events). Each event nudges
+# a sentiment score toward squadmates; strong scores become opinions that
+# are fed into the thought-generation prompt.
+
+RELATIONSHIP_EVENTS = {
+    "clear": ("bond", +1, "fought alongside"),
+    "contact": ("respect", +1, "held together under fire"),
+    "casualty": ("respect", +2, "fought to the end"),
+    "teammate_kia": ("respect", +2, "gave everything"),
+    "leader_downed": ("worry", +1, "leader is down"),
+    "leader_recovered": ("trust", +1, "leader came back"),
+    "order_change": ("adapt", +1, "handled new orders"),
+}
+
+# Personality friction: how one personality views another. Positive = bonus,
+# negative = friction. Drives variance so not everyone ends up "reliable".
+PERSONALITY_FRICTION = {
+    ("VETERAN", "ROOKIE"): -2, ("ROOKIE", "VETERAN"): +1,   # veteran finds rookie green
+    ("CAUTIOUS", "AGGRESSIVE"): -2, ("AGGRESSIVE", "CAUTIOUS"): -1,
+    ("CAUTIOUS", "JOKER"): -2, ("JOKER", "CAUTIOUS"): -1,
+    ("STEADY", "JOKER"): -1, ("JOKER", "STEADY"): +1,
+    ("AGGRESSIVE", "ROOKIE"): -1, ("VETERAN", "VETERAN"): +1,
+}
+
+RELATIONSHIP_OPINIONS = [
+    (8, "brother-in-arms", "{subject} is a brother-in-arms, would follow anywhere"),
+    (6, "trusted", "{subject} is trusted, solid under pressure"),
+    (4, "reliable", "{subject} is reliable, does the job"),
+    (1, "okay", "{subject} is okay, does what's needed"),
+    (-4, "reckless", "{subject} is reckless, takes too many risks"),
+    (-6, "unpredictable", "{subject} is unpredictable, hard to trust"),
+]
+
+
+def update_social_bonds(event: str, squad_names: list):
+    """Update each soldier's relationships/opinions based on a shared event.
+    Deterministic sentiment model: each event type nudges a score toward
+    every squadmate; strong scores materialize as opinions."""
+    if event not in RELATIONSHIP_EVENTS:
+        return
+    kind, delta, reason = RELATIONSHIP_EVENTS[event]
+    for name in squad_names:
+        mem = load_soldier_memory(name)
+        rels = mem.get("relationships", {})
+        opinions = mem.get("opinions", [])
+        own_personality = mem.get("personality") or app_state["ai_personalities"].get(name, "STEADY")
+        for other in squad_names:
+            if other == name:
+                continue
+            other_mem = load_soldier_memory(other)
+            other_personality = other_mem.get("personality") or app_state["ai_personalities"].get(other, "STEADY")
+            # Personality friction modifies how this event lands
+            friction = PERSONALITY_FRICTION.get((own_personality, other_personality), 0)
+            entry = rels.get(other, {"score": 0, "label": "unknown"})
+            entry["score"] = entry.get("score", 0) + delta + friction
+            # Recompute label from score
+            label = "unknown"
+            for threshold, lbl, _ in RELATIONSHIP_OPINIONS:
+                if entry["score"] >= threshold:
+                    label = lbl
+                    break
+            entry["label"] = label
+            rels[other] = entry
+        mem["relationships"] = rels
+        # Materialize strong opinions (cap at 6 stored opinions, refresh text)
+        opinion_topics = {o.get("topic") for o in opinions}
+        for other in squad_names:
+            if other == name:
+                continue
+            entry = rels.get(other, {})
+            score = entry.get("score", 0)
+            best = None
+            for threshold, lbl, template in RELATIONSHIP_OPINIONS:
+                if score >= threshold:
+                    best = (lbl, template)
+                    break  # first (strongest) matching label wins
+            if best and abs(score) >= 4 and other not in opinion_topics:
+                lbl, template = best
+                opinions.append({
+                    "topic": other,
+                    "opinion": template.format(subject=other),
+                    "strength": lbl,
+                    "score": score,
+                })
+                opinion_topics.add(other)
+        mem["opinions"] = opinions[-6:]
+        save_soldier_memory(name, mem)
+
+
+def get_social_summary(name: str) -> str:
+    """Format a soldier's relationships + opinions for LLM prompts."""
+    mem = load_soldier_memory(name)
+    rels = mem.get("relationships", {})
+    opinions = mem.get("opinions", [])
+    lines = []
+    if rels:
+        rel_parts = []
+        for other, entry in rels.items():
+            if entry.get("label") and entry["label"] != "unknown":
+                rel_parts.append(f"{other}: {entry['label']}")
+        if rel_parts:
+            lines.append("Squad relationships: " + ", ".join(rel_parts))
+    for o in opinions[-3:]:
+        lines.append(f"Opinion: {o.get('opinion', '')}")
+    return "\n".join(lines)
+
+
 app_state = {
     "last_sitrep": None,
     "health_check_time": time.time(),
@@ -830,6 +938,9 @@ def generate_ai_thoughts(event: str = ""):
     
     app_state["last_squad_names"] = list(current_names)
     
+    # F8.4: Update social bonds/opinions from this shared event
+    update_social_bonds(event, list(current_names))
+    
     # Cleanup old dead soldier files
     cleanup_dead_soldiers()
 
@@ -869,8 +980,10 @@ def generate_ai_thoughts(event: str = ""):
         backstory = get_soldier_backstory(m.name)
         history = get_soldier_history_summary(m.name, max_events=5)
         own_thoughts = get_soldier_thought_history(m.name)
+        social = get_social_summary(m.name)  # F8.4: relationships + opinions
         member_lines.append(
             f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
+            f"{social}\n"
             f"  Own recent thoughts:\n{own_thoughts}\n"
             f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
