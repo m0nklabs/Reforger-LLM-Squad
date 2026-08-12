@@ -106,6 +106,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .thought-item{background:var(--bg-tertiary);border-radius:var(--radius-sm);padding:8px 10px;margin-bottom:6px;border-left:3px solid var(--purple)}
 .thought-item .author{font-size:11px;font-weight:700;color:var(--purple);margin-bottom:2px}
 .thought-item .text{font-size:12px;color:var(--text-secondary);font-style:italic;line-height:1.5}
+.thought-item .tool-badge{font-size:10px;color:#ffcc00;background:rgba(255,204,0,.1);border:1px solid rgba(255,204,0,.3);border-radius:4px;padding:2px 6px;margin-top:4px;display:inline-block}
 
 .roster-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:4px;transition:background .15s;cursor:default}
 .roster-item:hover{background:var(--bg-hover)}
@@ -564,7 +565,12 @@ function renderThoughts(thoughts){
     el.innerHTML = items.map(t => {
       const name = t.name || t.author || 'Unknown';
       const text = t.thought || t.text || t.message || JSON.stringify(t);
-      return '<div class="thought-item"><div class="author">'+escapeHtml(name)+'</div><div class="text">'+escapeHtml(text)+'</div></div>';
+      let toolHtml = '';
+      if(t.tool && t.tool.name){
+        const args = JSON.stringify(t.tool.args || {});
+        toolHtml = '<div class="tool-badge">🔧 '+escapeHtml(t.tool.name)+' '+escapeHtml(args)+'</div>';
+      }
+      return '<div class="thought-item"><div class="author">'+escapeHtml(name)+'</div><div class="text">'+escapeHtml(text)+'</div>'+toolHtml+'</div>';
     }).join('');
   }
 }

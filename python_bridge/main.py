@@ -397,6 +397,76 @@ def log_soldier_thought(name: str, thought: str, mood: str):
     save_soldier_memory(name, mem)
 
 
+# ─── F8.3: Soldier Tools — agent actions that trigger game logic ───────
+# A soldier's thought JSON may include an optional "tool" block:
+#   {"name": "call_medic", "args": {"target": "Alpha_3"}}
+# Tools translate into real game orders (queued via /orders which the game
+# polls every 2s) or battle-log events. This makes soldiers AGENTS, not
+# commentators: their decisions change what happens in the world.
+
+TOOL_ORDER_MAP = {
+    "call_medic": "medic",          # emergency rescue order
+    "suggest_tactic": "formation",  # formation change
+}
+
+
+def handle_soldier_tool(name: str, tool: dict) -> str:
+    """Process one soldier tool call. Returns a human-readable result string."""
+    tool_name = (tool.get("name") or "").strip()
+    args = tool.get("args") or {}
+    if not tool_name:
+        return ""
+
+    result = f"{name} used {tool_name}"
+
+    if tool_name == "report_contact":
+        direction = args.get("direction", "?")
+        distance = args.get("distance", "?")
+        count = args.get("count", 1)
+        add_battle_event("CONTACT", f"{name} reports {count} hostile(s) {distance}m {direction}")
+        result += f" -> {count} hostiles {distance}m {direction} logged"
+        logger.info(f"[TOOL] {result}")
+
+    elif tool_name == "report_clear":
+        add_battle_event("CONTACT", f"{name} reports area clear")
+        result += " -> area clear logged"
+        logger.info(f"[TOOL] {result}")
+
+    elif tool_name == "request_orders":
+        add_battle_event("ORDER", f"{name} requests new orders")
+        result += " -> request logged"
+        logger.info(f"[TOOL] {result}")
+
+    elif tool_name == "report_status":
+        health = args.get("health", "?")
+        ammo = args.get("ammo", "?")
+        log_soldier_event(name, "status", f"Reported status: health={health}, ammo={ammo}")
+        result += f" -> health={health}, ammo={ammo} recorded"
+        logger.info(f"[TOOL] {result}")
+
+    elif tool_name == "call_medic":
+        target = args.get("target", name)
+        add_battle_event("CRITICAL", f"{name} calls MEDIC for {target}!")
+        # Queue the medic order for the game (squad moves to downed soldier)
+        app_state["pending_orders"].append({"cmd": "medic", "source": f"soldier:{name}"})
+        result += f" -> MEDIC order queued for {target}"
+        logger.info(f"[TOOL] {result}")
+
+    elif tool_name == "suggest_tactic":
+        formation = args.get("formation", "Line")
+        direction = args.get("direction", "")
+        add_battle_event("ORDER", f"{name} suggests {formation} formation" + (f" heading {direction}" if direction else ""))
+        app_state["pending_orders"].append({"cmd": "formation", "formation": formation, "source": f"soldier:{name}"})
+        result += f" -> {formation} formation order queued"
+        logger.info(f"[TOOL] {result}")
+
+    else:
+        logger.info(f"[TOOL] {name} tried unknown tool: {tool_name}")
+        result += f" (unknown tool {tool_name}, ignored)"
+
+    return result
+
+
 def get_soldier_thought_history(name: str, max_items: int = 3) -> str:
     """F8.1: The soldier's own recent thoughts (conversation memory)."""
     mem = ensure_soldier_identity(name)
@@ -503,7 +573,9 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
 
 def extract_json_block(content: str):
     """Extract a JSON object from LLM output that may contain prose/fences.
-    Returns parsed dict, or None if no valid JSON object found."""
+    Returns parsed dict, or None if no valid JSON object found.
+    Handles: prose prefix, ```json fences, truncated output (best-effort
+    repair by parsing individual member objects)."""
     if not content:
         return None
     # Strip markdown code fences
@@ -523,11 +595,50 @@ def extract_json_block(content: str):
             return json.loads(candidate)
         except json.JSONDecodeError:
             pass
+        # Best-effort repair for truncated output: parse individual {..} objects
+        repaired = _repair_truncated_json(candidate)
+        if repaired is not None:
+            return repaired
     # Last resort: try the raw text as JSON
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         return None
+
+
+def _repair_truncated_json(text: str):
+    """Try to salvage a truncated/irregular JSON blob.
+    Strategy: split on `},{` boundaries, parse each object individually,
+    and collect them under "thoughts" if they look like member objects."""
+    objects = []
+    depth = 0
+    cur = []
+    for ch in text:
+        if ch == "{":
+            depth += 1
+            cur.append(ch)
+        elif ch == "}":
+            depth -= 1
+            cur.append(ch)
+            if depth == 0:
+                chunk = "".join(cur)
+                try:
+                    obj = json.loads(chunk)
+                    if isinstance(obj, dict):
+                        objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                cur = []
+        elif cur:
+            cur.append(ch)
+    if not objects:
+        return None
+    # If any object has "thoughts" as a list, return it
+    for obj in objects:
+        if isinstance(obj.get("thoughts"), list):
+            return obj
+    # Otherwise treat collected objects as member thoughts
+    return {"thoughts": objects}
 
 
 def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
@@ -632,7 +743,18 @@ Personalities:
 
 When the situation is quiet/clear, members may chat with squadmates naturally.
 When in combat, thoughts should be tactical and urgent.
-Return JSON: {"thoughts": [{"name": "Alpha_1", "thought": "...", "mood": "..."}]}
+
+TOOLS — each member MAY optionally request ONE tool action if the situation warrants it:
+- report_contact(direction, distance, count): enemy sighting, report to squad
+- report_clear(): area is clear
+- request_orders(): ask CO for new orders
+- report_status(health, ammo): report own condition
+- call_medic(target): request medical help for a downed squadmate
+- suggest_tactic(formation, direction): suggest a tactical change (formation: Column/Line/Wedge/Diamond, direction: N/E/S/W/NE/NW/SE/SW)
+Only call a tool when it genuinely helps. Most of the time no tool is needed.
+
+Return JSON: {"thoughts": [{"name": "Alpha_1", "thought": "...", "mood": "...", "tool": {"name": "call_medic", "args": {"target": "Alpha_3"}}}]}
+"tool" is optional — omit it when no action is needed.
 Moods: alert, bored, nervous, confident, annoyed, scared, calm, excited."""
 
 def assign_personalities(squad):
@@ -760,7 +882,15 @@ def generate_ai_thoughts(event: str = ""):
         "Generate one thought per member reacting to the situation. The thought should reflect "
         "their rank, role, backstory AND their personal experiences. A veteran who has survived "
         "5 battles sounds different from a rookie on their first day. A medic thinks about wounds, "
-        "a grenadier about angles. Stay in character."
+        "a grenadier about angles. Stay in character.\n\n"
+        "TOOLS: each member may include an optional \"tool\" field in their JSON object when "
+        "the situation genuinely calls for action. Use report_contact for enemy sightings, "
+        "call_medic when a squadmate is down, suggest_tactic to propose a formation change, "
+        "report_status when hurt or low on ammo. Most members most of the time omit the tool "
+        "field — only act when it matters. Example: "
+        "{\"name\": \"Alpha_2\", \"thought\": \"...\", \"mood\": \"alert\", "
+        "\"tool\": {\"name\": \"report_contact\", \"args\": {\"direction\": \"NE\", "
+        "\"distance\": 150, \"count\": 3}}}"
     )
 
     try:
@@ -771,7 +901,7 @@ def generate_ai_thoughts(event: str = ""):
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            max_tokens=350,
+            max_tokens=600,
             temperature=0.7
         )
         content = response.choices[0].message.content if response.choices else ""
@@ -784,11 +914,15 @@ def generate_ai_thoughts(event: str = ""):
             app_state["cached_thoughts"] = result
             app_state["llm_calls"] += 1
             # F8.1: Store each soldier's thought in their personal conversation history
+            # F8.3: Process optional tool calls (report_contact, call_medic, suggest_tactic...)
             for t in thoughts:
                 tname = t.get("name", "?")
                 tthought = t.get("thought", "")
                 tmood = t.get("mood", "neutral")
                 log_soldier_thought(tname, tthought, tmood)
+                tool = t.get("tool")
+                if isinstance(tool, dict) and tool.get("name"):
+                    handle_soldier_tool(tname, tool)
             logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
             for t in thoughts:
                 name = t.get("name", "?")
