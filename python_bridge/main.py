@@ -1416,21 +1416,24 @@ async def startup_event():
 
 
 @app.get("/soldiers")
-async def get_soldier_memories():
-    """F7: List all soldier memory files (for debugging)."""
+async def get_soldier_memories(detail: int = 0):
+    """F7: List all soldier memory files. ?detail=1 includes full events/thoughts."""
     ensure_soldier_dirs()
     soldiers = []
     for filepath in SOLDIER_MEMORY_DIR.glob("*.json"):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 mem = json.load(f)
-            soldiers.append({
+            entry = {
                 "name": mem.get("name", filepath.stem),
                 "status": mem.get("status", "unknown"),
                 "personality": mem.get("personality", "?"),
                 "rank": (mem.get("identity") or {}).get("rank", "?"),
                 "role": (mem.get("identity") or {}).get("role", "?"),
-                "backstory": (mem.get("backstory", "") or "")[:100],
+                "age": (mem.get("identity") or {}).get("age", "?"),
+                "origin": (mem.get("identity") or {}).get("origin", "?"),
+                "deployments": (mem.get("identity") or {}).get("deployments", 0),
+                "backstory": (mem.get("backstory", "") or ""),
                 "events": len(mem.get("events", [])),
                 "battles": mem.get("battles_survived", 0),
                 "kills": mem.get("kills", 0),
@@ -1446,7 +1449,17 @@ async def get_soldier_memories():
                     if v.get("label") and v["label"] != "unknown"
                 },
                 "opinions": [o.get("opinion", "") for o in (mem.get("opinions") or [])[-2:]],
-            })
+            }
+            # F8.10: Full detail mode for the dashboard soldier panel
+            if detail:
+                entry["event_log"] = [
+                    {"t": e.get("time", "")[-8:-3], "type": e.get("type", "?"), "desc": e.get("desc", "")}
+                    for e in (mem.get("events") or [])[-15:]
+                ]
+                entry["thought_log"] = [
+                    h.get("thought", "") for h in (mem.get("thought_history") or [])[-10:]
+                ]
+            soldiers.append(entry)
         except (json.JSONDecodeError, IOError):
             pass
     # F8.8: Include archived KIA soldiers from the graveyard

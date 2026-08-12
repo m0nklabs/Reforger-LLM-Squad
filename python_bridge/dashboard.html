@@ -316,9 +316,21 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
     <div class="divider"></div>
 
     <!-- Soldier Roster -->
-    <div class="section-title">Soldier Roster</div>
+    <div class="section-title">Soldier Roster <span style="font-size:10px;color:var(--text-muted)">(click for details)</span></div>
     <div id="rosterList">
       <div class="empty-state">No soldier data.</div>
+    </div>
+
+    <!-- F8.10: Soldier detail panel (hidden until a roster item is clicked) -->
+    <div id="soldierDetail" style="display:none;margin-top:10px;padding:10px;background:var(--bg-tertiary);border-radius:var(--radius-sm);border:1px solid var(--border)">
+      <div id="sdHeader" style="font-weight:700;margin-bottom:6px"></div>
+      <div id="sdBackstory" style="font-size:11px;color:var(--text-secondary);font-style:italic;margin-bottom:8px"></div>
+      <div id="sdMeta" style="font-size:11px;color:var(--text-secondary);margin-bottom:8px"></div>
+      <div class="section-title" style="margin-top:6px;font-size:11px">Event Log</div>
+      <div id="sdEvents" style="font-size:10px;color:var(--text-secondary);max-height:150px;overflow-y:auto"></div>
+      <div class="section-title" style="margin-top:6px;font-size:11px">Recent Thoughts</div>
+      <div id="sdThoughts" style="font-size:10px;color:var(--text-secondary);max-height:120px;overflow-y:auto;font-style:italic"></div>
+      <div style="margin-top:8px;text-align:right"><button onclick="closeSoldierDetail()" style="font-size:10px;padding:3px 10px">Close</button></div>
     </div>
   </aside>
 
@@ -615,7 +627,7 @@ async function pollSoldiers(){
         '<span class="r-rel" title="'+escapeHtml(k)+'">'+escapeHtml(k.split('_')[0])+':'+escapeHtml(v)+'</span>'
       ).join('');
       const opinion = (s.opinions && s.opinions[0]) ? '<div class="r-opinion">💬 '+escapeHtml(s.opinions[0])+'</div>' : '';
-      return '<div class="roster-item">' +
+      return '<div class="roster-item" onclick="showSoldierDetail(\''+escapeHtml(s.name)+'\')" style="cursor:pointer">' +
         '<span class="r-name">'+escapeHtml((rank? rank+' ':'')+s.name)+'</span>' +
         '<span class="r-role">'+escapeHtml(role)+'</span>' +
         '<span class="r-status '+status+'">'+status+'</span>' +
@@ -649,6 +661,36 @@ async function pollSoldiers(){
 function escapeHtml(str){
   if(str === null || str === undefined) return '';
   return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// F8.10: Soldier detail panel — fetch full memory on click
+async function showSoldierDetail(name){
+  const panel = document.getElementById('soldierDetail');
+  try{
+    const resp = await fetch(API_BASE + '/soldiers?detail=1');
+    const data = await resp.json();
+    const s = (data.soldiers || []).find(x => x.name === name);
+    if(!s){ panel.style.display='none'; return; }
+    document.getElementById('sdHeader').innerHTML =
+      escapeHtml((s.rank? s.rank+' ':'')+s.name)+' <span style="font-size:10px;color:var(--text-muted)">'+escapeHtml(s.role)+' · '+escapeHtml(s.personality)+' · mood: '+escapeHtml(s.mood)+'</span>';
+    document.getElementById('sdBackstory').textContent = s.backstory || '';
+    document.getElementById('sdMeta').innerHTML =
+      'Age: '+escapeHtml(s.age)+' · Origin: '+escapeHtml(s.origin)+' · Deployments: '+escapeHtml(s.deployments)+
+      ' · Kills: '+(s.kills||0)+' · Battles: '+(s.battles||0);
+    const events = s.event_log || [];
+    document.getElementById('sdEvents').innerHTML = events.length
+      ? events.map(e => '<div>['+escapeHtml(e.t)+'] '+escapeHtml(e.type)+': '+escapeHtml(e.desc)+'</div>').join('')
+      : '<div style="color:var(--text-muted)">No events recorded.</div>';
+    const thoughts = s.thought_log || [];
+    document.getElementById('sdThoughts').innerHTML = thoughts.length
+      ? thoughts.map(t => '<div>"'+escapeHtml(t)+'"</div>').join('')
+      : '<div style="color:var(--text-muted)">No thoughts recorded.</div>';
+    panel.style.display = 'block';
+  } catch(e){ /* silent */ }
+}
+
+function closeSoldierDetail(){
+  document.getElementById('soldierDetail').style.display = 'none';
 }
 
 // ====== Start polling ======
