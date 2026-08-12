@@ -69,18 +69,26 @@ and make no further changes.
 
     Write-Log "=== Iteration $iteration starting (elapsed $([math]::Round(((Get-Date) - $StartTime).TotalHours, 1))h) ==="
 
-    # Run pi in print mode, capturing output
+    # Run pi in print mode, capturing output.
+    # Note: 'pi' is a .cmd shim - Start-Process can't exec it directly, and
+    # the long prompt would need fragile quoting. So: write the prompt to a
+    # temp file and pipe it via stdin (pi -p merges piped stdin into the prompt).
+    $promptFile = Join-Path $PSScriptRoot "dev_loop_prompt_$iteration.txt"
+    Set-Content -Path $promptFile -Value $devPrompt -Encoding UTF8
     $outFile = Join-Path $PSScriptRoot "dev_loop_iter_$iteration.out"
-    $piArgs = @('-p', $devPrompt, '--no-session')
-    $proc = Start-Process -FilePath 'pi' -ArgumentList $piArgs -WorkingDirectory $ProjectRoot `
-        -RedirectStandardOutput $outFile -RedirectStandardError "$outFile.err" `
-        -PassThru -NoNewWindow
+    $errFile = "$outFile.err"
+    $cmdLine = "pi -p --no-session < `"$promptFile`" > `"$outFile`" 2> `"$errFile`""
+    $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmdLine) `
+        -WorkingDirectory $ProjectRoot -PassThru -NoNewWindow
 
     if (-not $proc.WaitForExit($IterationTimeoutSec * 1000)) {
         Write-Log "WARNING: iteration $iteration timed out after ${IterationTimeoutSec}s -- killing pi"
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        # cmd spawns pi as a child; kill the tree too
+        taskkill /PID $($proc.Id) /T /F 2>&1 | Out-Null
         Start-Sleep -Seconds 2
     }
+    Remove-Item $promptFile -Force -ErrorAction SilentlyContinue
 
     $output = ''
     if (Test-Path $outFile) {

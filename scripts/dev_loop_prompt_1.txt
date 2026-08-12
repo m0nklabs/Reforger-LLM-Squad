@@ -1,0 +1,23 @@
+﻿You are in an autonomous overnight development loop for the Reforger-LLM-Squad project (Q:\GAMES\Reforger-LLM-Squad).
+Read AGENTS.md first -- especially the "Development roadmap" section (Phases V/A/B/C/D/E) and the "Critical rules".
+Pick the highest-priority item that can be completed WITHOUT a live game client connected.
+Bridge-only work, unit tests, dashboard, and code-quality fixes are fine; live-game verification is NOT possible right now.
+
+Workflow per iteration:
+1. Choose ONE item from the roadmap (or a clear bug from the rules). Do not start huge multi-item refactors.
+2. Implement it. Test it with the running bridge (http://127.0.0.1:5001) or with unit tests. Fix what you break.
+3. Update AGENTS.md: move the item to Completed, add new lessons as rules if applicable.
+4. Run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-agent-docs.bat
+5. Commit (short, feature-scoped message) and push to origin main.
+
+Hard constraints:
+- NEVER restart the DS (ArmaReforgerServer.exe) or run sync_mod.ps1 / launch_ds.bat.
+- NEVER publish to the BI Workshop.
+- NEVER commit config.json (secrets) or use git add -f on ignored files.
+- NEVER change the addon GUID or the base-game GUID 58D0FB3206B6F859.
+- Do not wait for or require a connected game client.
+- Keep the bridge running; restart it via scripts\restart_bridge_console.ps1 if you changed bridge code.
+
+When you are done (all remaining roadmap items are blocked on a live client, or nothing meaningful is left):
+respond with exactly: DEVELOPMENT LOOP DONE
+and make no further changes.

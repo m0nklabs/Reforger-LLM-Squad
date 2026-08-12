@@ -215,6 +215,9 @@ def load_soldier_memory(name: str) -> dict:
         "identity": None,
         "backstory": None,
         "thought_history": [],  # F8.1: own thoughts, rolling window of 10
+        # A.1: full conversation log (user situation briefs + assistant thoughts),
+        # last 10 exchanges (20 messages). Feeds per-soldier LLM conversations.
+        "conversation": [],
     }
 
 def save_soldier_memory(name: str, memory: dict):
@@ -365,6 +368,7 @@ def ensure_soldier_identity(name: str) -> dict:
     }
     mem["backstory"] = backstory
     mem["thought_history"] = mem.get("thought_history", [])  # F8.1 conversation history
+    mem["conversation"] = mem.get("conversation", [])  # A.1: migrate old files
     save_soldier_memory(name, mem)
     return mem
 
@@ -396,6 +400,28 @@ def log_soldier_thought(name: str, thought: str, mood: str):
     hist.append({"time": datetime.now().isoformat(), "thought": thought})
     mem["thought_history"] = hist[-10:]  # rolling window of 10
     save_soldier_memory(name, mem)
+
+
+def log_soldier_exchange(name: str, thought: str, mood: str, situation_brief: str):
+    """A.1: Store a full user->assistant exchange in the soldier's conversation.
+
+    Keeps thought_history (dashboard view) AND the new conversation log
+    (real chat turns for per-soldier LLM prompts). Rolling: last 10
+    exchanges = 20 messages.
+    """
+    name = sanitize_soldier_name(name)
+    mem = load_soldier_memory(name)
+    mem["last_thought"] = thought
+    mem["mood"] = mood or mem.get("mood", "neutral")
+    hist = mem.get("thought_history", [])
+    hist.append({"time": datetime.now().isoformat(), "thought": thought})
+    mem["thought_history"] = hist[-10:]  # rolling window of 10
+    conv = mem.get("conversation", [])
+    conv.append({"role": "user", "content": situation_brief})
+    conv.append({"role": "assistant", "content": thought, "mood": mem["mood"]})
+    mem["conversation"] = conv[-20:]  # last 10 exchanges
+    save_soldier_memory(name, mem)
+
 
 
 def sanitize_soldier_name(name: str) -> str:
@@ -920,6 +946,44 @@ Return JSON: {"thoughts": [{"name": "Alpha_1", "thought": "...", "mood": "...", 
 "tool" is optional — omit it when no action is needed.
 Moods: alert, bored, nervous, confident, annoyed, scared, calm, excited."""
 
+# ─── A.1: Per-soldier conversations ────────────────────────────────────
+# Each soldier gets ONE private LLM conversation: a system prompt with their
+# own identity + backstory + chain of command, their own thought history as
+# real chat turns, and the current situation as the latest user turn.
+
+PERSONALITY_DESCRIPTIONS = {
+    "AGGRESSIVE": "wants to attack, push forward, impatient",
+    "CAUTIOUS": "worried about ambushes, wants cover, overwatch",
+    "JOKER": "cracks jokes, lightens the mood, doesn't take things seriously",
+    "VETERAN": "calm, experienced, tactical observations",
+    "ROOKIE": "nervous, eager to prove themselves, asks questions",
+    "STEADY": "professional, focused, mission-oriented",
+}
+
+AI_THOUGHT_SYSTEM_PROMPT_SOLO = """You are {identity}, a soldier in an Arma Reforger squad.
+Backstory: {backstory}
+Personality: {personality} - {personality_desc}
+
+The squad leader (CO) is the PLAYER. Refer to them as "CO" or "sir"; you wait for their orders.
+
+You are shown the current tactical situation and your own recent thoughts (your private
+conversation log). Produce ONE new thought (max 15 words) in character: react to what is
+happening NOW and what CHANGED since your last thought. A veteran sounds different from a
+rookie; your role shapes what you notice.
+
+CRITICAL: Do NOT repeat or paraphrase your own earlier thoughts. Each thought must be NEW.
+
+OPTIONAL tool (only call when the situation genuinely warrants action - most of the time omit it):
+- report_contact(direction, distance, count): enemy sighting, report to squad
+- report_clear(): area is clear
+- request_orders(): ask CO for new orders
+- report_status(health, ammo): report own condition
+- call_medic(target): request medical help for a downed squadmate
+- suggest_tactic(formation, direction): formation: Column/Line/Wedge/Diamond, direction: N/E/S/W/NE/NW/SE/SW
+
+Return JSON only: {{"thought": "...", "mood": "alert|bored|nervous|confident|annoyed|scared|calm|excited", "tool": {{"name": "...", "args": {{...}}}}}}
+The "tool" field is optional - omit it when no action is needed."""
+
 def assign_personalities(squad):
     """Assign stable personalities to squad members (deterministic by name)."""
     import hashlib
@@ -1007,7 +1071,7 @@ def generate_ai_thoughts(event: str = ""):
     app_state["last_thought_fingerprint"] = fp
     app_state["thought_calls"] += 1
 
-    # ─── Build per-soldier context with personal memory ────────────────
+    # ─── Build shared situation + event context ────────────────────────
     situation = get_situation_text(sitrep) + get_battle_memory(3)
     
     # Event-specific context
@@ -1026,7 +1090,49 @@ def generate_ai_thoughts(event: str = ""):
         event_context = "\nEVENT: The squad leader is DOWN! Panic, urgency, calls for medic, protective instinct.\n"
     elif event == "leader_recovered":
         event_context = "\nEVENT: The squad leader is back up. Relief, determination, ready to continue.\n"
-    
+
+    # ─── A.1: per-soldier LLM conversations (ONE private conversation per
+    # soldier: identity+backstory+CoC system prompt, own thought history as
+    # real chat turns, current situation as the latest turn). Falls back to
+    # the batched single-call path if per-soldier generation is disabled or
+    # no soldier produced a thought.
+    thoughts = []
+    if CONFIG.get("llm", {}).get("per_soldier_thoughts", True):
+        thoughts = _generate_thoughts_per_soldier(sitrep, situation, event_context)
+    if not thoughts:
+        thoughts = _generate_thoughts_batched(sitrep, situation, event_context)
+    if not thoughts:
+        return {"thoughts": []}
+
+    result = {"thoughts": thoughts}
+    app_state["cached_thoughts"] = result
+    # A.1: store each soldier's thought in their personal conversation history
+    # (thought_history + conversation log). F8.3: process optional tool calls.
+    event_brief = event_context.strip().splitlines()[0][:120] if event_context.strip() else "CONTEXT: routine situation"
+    for t in thoughts:
+        tname = sanitize_soldier_name(t.get("name", "?"))
+        tthought = t.get("thought", "")
+        tmood = t.get("mood", "neutral")
+        member = next((m for m in sitrep.squad if m.name == tname), None)
+        brief = event_brief
+        if member:
+            brief += f" | your status: order={member.order}, sitrep={member.sitrep}"
+        log_soldier_exchange(tname, tthought, tmood, brief)
+        tool = t.get("tool")
+        if isinstance(tool, dict) and tool.get("name"):
+            handle_soldier_tool(tname, tool)
+    logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
+    for t in thoughts:
+        name = t.get("name", "?")
+        thought = t.get("thought", "")[:80]
+        mood = t.get("mood", "?")
+        logger.info(f"  [{name} ({mood})] {thought}")
+    return result
+
+
+def _generate_thoughts_batched(sitrep, situation, event_context):
+    """F2.7 fallback: single shared-conversation LLM call for the whole squad.
+    Used when per-soldier generation is disabled or produced no thoughts."""
     # Build member descriptions WITH identity + personal memory + conversation history
     member_lines = []
     for m in sitrep.squad:
@@ -1042,7 +1148,7 @@ def generate_ai_thoughts(event: str = ""):
             f"  Own recent thoughts:\n{own_thoughts}\n"
             f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
-    
+
     members_text = "\n".join(member_lines)
     prompt = (
         f"Situation:\n{situation}\n{event_context}\n"
@@ -1074,35 +1180,91 @@ def generate_ai_thoughts(event: str = ""):
         )
         content = response.choices[0].message.content if response.choices else ""
         data = extract_json_block(content)
-        if data:
-            thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
-            if not isinstance(thoughts, list):
-                thoughts = []
-            result = {"thoughts": thoughts}
-            app_state["cached_thoughts"] = result
-            app_state["llm_calls"] += 1
-            # F8.1: Store each soldier's thought in their personal conversation history
-            # F8.3: Process optional tool calls (report_contact, call_medic, suggest_tactic...)
-            for t in thoughts:
-                tname = sanitize_soldier_name(t.get("name", "?"))
-                tthought = t.get("thought", "")
-                tmood = t.get("mood", "neutral")
-                log_soldier_thought(tname, tthought, tmood)
-                tool = t.get("tool")
-                if isinstance(tool, dict) and tool.get("name"):
-                    handle_soldier_tool(tname, tool)
-            logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
-            for t in thoughts:
-                name = t.get("name", "?")
-                thought = t.get("thought", "")[:80]
-                mood = t.get("mood", "?")
-                logger.info(f"  [{name} ({mood})] {thought}")
-            return result
+        if not data:
+            logger.warning(f"Batched thoughts: unparseable LLM output: {content[:100]!r}")
+            return []
+        thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
+        if not isinstance(thoughts, list):
+            thoughts = []
+        app_state["llm_calls"] += 1
+        return thoughts
     except Exception as e:
-        logger.error(f"AI thought generation failed: {e}")
+        logger.error(f"AI thought generation failed (batched): {e}")
         app_state["errors"] += 1
+        return []
 
-    return {"thoughts": []}
+
+def _generate_thoughts_per_soldier(sitrep, situation, event_context):
+    """A.1: one private LLM conversation per soldier.
+
+    messages = [soldier system prompt (identity + backstory + personality +
+    CoC + tool rules)] + [own conversation history as real chat turns] +
+    [current situation as the latest user turn]. One LLM call per soldier.
+    Returns a list of thought dicts {"name", "thought", "mood", "tool"}.
+    """
+    event_brief = event_context.strip().splitlines()[0][:120] if event_context.strip() else "CONTEXT: routine situation"
+    thoughts = []
+    for m in sitrep.squad:
+        name = m.name
+        mem = ensure_soldier_identity(name)
+        p = mem.get("personality") or app_state["ai_personalities"].get(name, "STEADY")
+        identity = get_soldier_identity_summary(name)
+        backstory = get_soldier_backstory(name)
+        social = get_social_summary(name)
+        system_content = AI_THOUGHT_SYSTEM_PROMPT_SOLO.format(
+            identity=identity,
+            backstory=backstory,
+            personality=p,
+            personality_desc=PERSONALITY_DESCRIPTIONS.get(p, ""),
+        )
+        if social:
+            system_content += "\n\nSquad social context:\n" + social
+
+        # Own conversation history (last 6 exchanges = 12 messages) as real chat turns
+        conv = [c for c in mem.get("conversation", []) if isinstance(c, dict) and c.get("role")]
+        history = conv[-12:]
+
+        user_content = (
+            f"[NOW] {event_brief}\n\n"
+            f"{situation}\n"
+            f"Your status: order={m.order}, sitrep={m.sitrep}"
+        )
+        try:
+            response = client.chat.completions.create(
+                model=CONFIG["llm"]["model"],
+                messages=[{"role": "system", "content": system_content}] + history + [{"role": "user", "content": user_content}],
+                response_format={"type": "json_object"},
+                max_tokens=300,
+                temperature=0.7
+            )
+            content = response.choices[0].message.content if response.choices else ""
+            data = extract_json_block(content)
+            if not data:
+                logger.warning(f"[A.1] {name}: unparseable thought output: {content[:100]!r}")
+                continue
+            # Accept a bare thought object OR an old-style {"thoughts": [...]} wrapper
+            if isinstance(data.get("thoughts"), list) and data["thoughts"]:
+                obj = data["thoughts"][0]
+            else:
+                obj = data
+            if not isinstance(obj, dict) or not obj.get("thought"):
+                logger.warning(f"[A.1] {name}: no thought text in output: {content[:100]!r}")
+                continue
+            claimed = sanitize_soldier_name(obj.get("name", name)) or name
+            if claimed != name:
+                logger.warning(f"[A.1] LLM claimed to be '{claimed}' while generating for {name} - attributing to {name}")
+            thoughts.append({
+                "name": name,
+                "thought": str(obj.get("thought", ""))[:200],
+                "mood": str(obj.get("mood", "neutral"))[:20],
+                "tool": obj.get("tool") if isinstance(obj.get("tool"), dict) else None,
+            })
+            app_state["llm_calls"] += 1
+        except Exception as e:
+            logger.error(f"[A.1] thought generation failed for {name}: {e}")
+            app_state["errors"] += 1
+    return thoughts
+
 @app.get("/health")
 async def health_check():
     uptime = time.time() - app_state["health_check_time"]
