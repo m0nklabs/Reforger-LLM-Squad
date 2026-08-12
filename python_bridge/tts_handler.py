@@ -8,10 +8,12 @@ Fallback: pyttsx3 (offline, SAPI5, lower quality, no internet needed)
 Each squad member gets a distinct voice for immersion.
 """
 import asyncio
+import json
 import logging
 import os
 import tempfile
 import threading
+from pathlib import Path
 
 logger = logging.getLogger("tts_handler")
 
@@ -33,6 +35,27 @@ EDGE_VOICES = [
 PYTTSX3_VOICES = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
 
 
+# C.3: per-soldier voice overrides (name -> EDGE_VOICES index), persisted
+# so the operator's choices survive bridge restarts. File is gitignored.
+VOICE_ASSIGNMENTS_FILE = Path(__file__).resolve().parent / "voice_assignments.json"
+
+
+def _load_voice_assignments() -> dict:
+    """C.3: load {name: index} overrides from disk, validating indices."""
+    try:
+        with open(VOICE_ASSIGNMENTS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(k): int(v)
+            for k, v in raw.items()
+            if 0 <= int(v) < len(EDGE_VOICES)
+        }
+    except (json.JSONDecodeError, IOError, ValueError, TypeError):
+        return {}
+
+
 class TTSHandler:
     """Handles text-to-speech for squad member voice replies."""
 
@@ -50,6 +73,10 @@ class TTSHandler:
         self._min_interval = 2.0  # min seconds between TTS calls
         self._running = False
         self._loop = None
+        # C.3: per-soldier voice overrides (name -> EDGE_VOICES index)
+        self.voice_overrides = _load_voice_assignments()
+        if self.voice_overrides:
+            logger.info(f"[C.3] voice overrides loaded: {self.voice_overrides}")
 
         # Check availability
         try:
@@ -132,14 +159,44 @@ class TTSHandler:
 
         logger.debug(f"No TTS engine available, skipping: {text[:30]}...")
 
-    def _speak_edge(self, text: str, member_index: int) -> bool:
+    def assign_voice(self, name: str, voice) -> bool:
+        """C.3: override a soldier's voice (index 0..N-1, or a voice id
+        string, or None/-1 to remove the override). Persists to disk."""
+        if not name:
+            return False
+        if voice is None or voice == -1 or voice == "default" or voice == "":
+            self.voice_overrides.pop(name, None)
+        else:
+            try:
+                idx = int(voice)
+            except (ValueError, TypeError):
+                # voice id string -> index
+                idx = EDGE_VOICES.index(str(voice)) if str(voice) in EDGE_VOICES else -1
+            if not (0 <= idx < len(EDGE_VOICES)):
+                return False
+            self.voice_overrides[name] = idx
+        try:
+            with open(VOICE_ASSIGNMENTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.voice_overrides, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            logger.warning(f"[C.3] voice assignments persist failed: {e}")
+        logger.info(f"[C.3] voice assignment {name} -> {self.voice_overrides.get(name, 'default')}")
+        return True
+
+    def _resolve_voice_index(self, member_name: str, member_index: int) -> int:
+        """C.3: per-soldier override wins over the fixed-by-index default."""
+        if member_name and member_name in self.voice_overrides:
+            return self.voice_overrides[member_name]
+        return member_index
+
+    def _speak_edge(self, text: str, member_index: int, member_name: str = "") -> bool:
         """Speak using edge-tts. Returns True on success."""
         try:
             import edge_tts
             import subprocess
             import platform
 
-            voice = EDGE_VOICES[member_index % len(EDGE_VOICES)]
+            voice = EDGE_VOICES[self._resolve_voice_index(member_name, member_index) % len(EDGE_VOICES)]
 
             # Generate audio file
             tmp_file = os.path.join(tempfile.gettempdir(), f"reforger_tts_{threading.get_ident()}.mp3")
@@ -185,13 +242,13 @@ class TTSHandler:
             logger.warning(f"edge-tts failed: {e}")
             return False
 
-    def _speak_pyttsx3(self, text: str, member_index: int):
+    def _speak_pyttsx3(self, text: str, member_index: int, member_name: str = ""):
         """Speak using pyttsx3 (offline fallback)."""
         try:
             with self._lock:
                 # Set voice if available
                 if self._pyttsx3_voices and len(self._pyttsx3_voices) > 0:
-                    voice_idx = PYTTSX3_VOICES[member_index % len(PYTTSX3_VOICES)]
+                    voice_idx = PYTTSX3_VOICES[self._resolve_voice_index(member_name, member_index) % len(PYTTSX3_VOICES)]
                     if voice_idx < len(self._pyttsx3_voices):
                         self._pyttsx3_engine.setProperty(
                             "voice", self._pyttsx3_voices[voice_idx].id
@@ -214,4 +271,9 @@ class TTSHandler:
             "running": self._running,
             "last_spoken": self._last_spoken[:80] if self._last_spoken else "",
             "voices": len(EDGE_VOICES),
+            # C.3: voice picker data for the dashboard
+            "voice_options": EDGE_VOICES,
+            "assignments": {
+                name: EDGE_VOICES[idx] for name, idx in sorted(self.voice_overrides.items())
+            },
         }

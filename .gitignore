@@ -64,3 +64,4 @@ server.json
 python_bridge/reports/
 python_bridge/pending_orders.json
 scripts/bridge_watchdog.log
+python_bridge/voice_assignments.json

@@ -94,7 +94,7 @@ voice_handler = VoiceHandler(
 )
 
 # Phase 3: TTS squad feedback (edge-tts + pyttsx3 fallback)
-from tts_handler import TTSHandler
+from tts_handler import TTSHandler, EDGE_VOICES
 tts_handler = TTSHandler(CONFIG.get("tts", {}))
 
 app = FastAPI(title="Reforger LLM Squad Control Bridge")
@@ -2026,6 +2026,26 @@ async def post_orders(request: Request):
         logger.info(f"Order queued: {data}")
         return {"status": "ok", "queued": len(app_state["pending_orders"])}
     return {"status": "error", "msg": "no data"}
+
+# =======================================================================
+# C.3: per-soldier voice assignment (dashboard voice picker)
+# POST /voice_assign  {"name": "Alpha_1", "voice": 3 | "en-US-GuyNeural" | null}
+# =======================================================================
+@app.post("/voice_assign")
+async def voice_assign(request: Request):
+    data = await _get_data(request)
+    if not data or not data.get("name"):
+        return {"status": "error", "msg": "name required"}
+    name = sanitize_soldier_name(str(data["name"]))
+    ok = tts_handler.assign_voice(name, data.get("voice"))
+    return {
+        "status": "ok" if ok else "error",
+        "name": name,
+        "voice": tts_handler.voice_overrides.get(name),
+        "assignments": {
+            n: EDGE_VOICES[i] for n, i in tts_handler.voice_overrides.items()
+        },
+    }
 
 # =======================================================================
 # /sitrep — GET (query param) or POST (body)
