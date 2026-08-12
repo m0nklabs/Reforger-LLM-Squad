@@ -731,6 +731,27 @@ def test_replacement_resurrection_and_legacy():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Lima_1.json").unlink(missing_ok=True)
 
 
+def test_error_surfacing():
+    print("test_error_surfacing")
+    bridge.app_state["recent_errors"] = []
+    bridge.app_state["errors"] = 0
+    try:
+        raise RuntimeError("boom test")
+    except RuntimeError as e:
+        bridge._record_error("test_source", e)
+    check("errors counter incremented", bridge.app_state["errors"] == 1)
+    errs = bridge.app_state["recent_errors"]
+    check("error recorded with source", len(errs) == 1 and errs[0]["source"] == "test_source" and "boom test" in errs[0]["error"])
+    check("traceback captured", "RuntimeError" in errs[0]["traceback"] and "test_error_surfacing" in errs[0]["traceback"])
+    # rolling window caps at 10
+    for i in range(12):
+        bridge._record_error("spam", ValueError(f"err {i}"))
+    check("rolling window capped at 10", len(bridge.app_state["recent_errors"]) == 10)
+    check("oldest dropped", [e["error"] for e in bridge.app_state["recent_errors"]] == [f"ValueError: err {i}" for i in range(2, 12)])
+    bridge.app_state["recent_errors"] = []
+    bridge.app_state["errors"] = 0
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -775,6 +796,8 @@ def run_tests():
     test_session_boundary_live_flow_sequence()
     test_after_action_report_written_on_session_end()
     test_report_summary_in_prompts()
+    print("=== E.3 error surfacing unit tests ===")
+    test_error_surfacing()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()

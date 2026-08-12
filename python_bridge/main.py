@@ -12,6 +12,7 @@ import time
 import os
 import math
 import logging
+import traceback
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
@@ -977,7 +978,29 @@ app_state = {
     "kill_rotation": 0,       # F8.5: round-robin kill attribution index
     "last_squad_names": [],  # Track squad member names for death detection
     "soldier_memory_enabled": True,    # F6: track leader state changes
+    # E.3: rolling trace of the last 10 bridge errors (source + traceback),
+    # exposed via /health for diagnosis without digging through logs
+    "recent_errors": [],
 }
+
+def _record_error(source: str, exc: BaseException):
+    """E.3: count a bridge error AND keep a rolling trace (last 10) of
+    source + message + short traceback. /health exposes them so failures
+    can be diagnosed without digging through bridge.log.
+    Must be called from inside an except block (or with a constructed
+    exception for parse failures)."""
+    app_state["errors"] += 1
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=3))
+    errs = app_state.setdefault("recent_errors", [])
+    errs.append({
+        "time": time.strftime("%H:%M:%S"),
+        "source": source,
+        "error": f"{type(exc).__name__}: {exc}",
+        "traceback": tb,
+    })
+    app_state["recent_errors"] = errs[-10:]
+    logger.error(f"[ERROR:{source}] {type(exc).__name__}: {exc}")
+
 
 def add_battle_event(event_type: str, description: str):
     """F5: Add an event to the battle memory log."""
@@ -1220,8 +1243,7 @@ def call_llm(command: str, situation: str) -> SitRepResponse:
             except: to = None
         return SitRepResponse(status="ok", action=data.get("action", "HOLD"), target_offset=to, voice_reply=data.get("voice_reply", ""))
     except Exception as e2:
-        logger.error(f"LLM call failed: {e2}")
-        app_state["errors"] += 1
+        _record_error("call_llm", e2)
         return SitRepResponse(status="error", action="HOLD", voice_reply="Command timeout, holding position.")
 
 # =======================================================================
@@ -1637,8 +1659,7 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         app_state["llm_calls"] += 1
         return thoughts
     except Exception as e:
-        logger.error(f"AI thought generation failed (batched): {e}")
-        app_state["errors"] += 1
+        _record_error("thoughts_batched", e)
         return []
 
 
@@ -1753,8 +1774,7 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
             })
             app_state["llm_calls"] += 1
         except Exception as e:
-            logger.error(f"[A.1] thought generation failed for {name}: {e}")
-            app_state["errors"] += 1
+            _record_error(f"thought_{name}", e)
     return thoughts
 
 @app.get("/health")
@@ -1772,7 +1792,9 @@ async def health_check():
         "tts_enabled": tts_handler.enabled,
         # B.4: session length + fatigue for quick operator checks
         "session_minutes": round((time.time() - app_state.get("session_start_time", time.time())) / 60, 1),
-        "fatigue": _compute_fatigue().get("label", "fresh")
+        "fatigue": _compute_fatigue().get("label", "fresh"),
+        # E.3: last bridge exceptions (source, message, short traceback)
+        "recent_errors": app_state.get("recent_errors", [])[-5:],
     }
 
 # =======================================================================
@@ -2078,7 +2100,7 @@ def generate_stavka_orders(opfor_count: int = -1):
             data = extract_json_block(content)
             if not data:
                 logger.warning(f"Stavka: unparseable LLM output: {content[:80]!r}")
-                app_state["errors"] += 1
+                _record_error("stavka_unparseable", ValueError(content[:80]))
                 return {"orders": []}
             orders = data.get("orders", [])
             result = {"orders": orders}
@@ -2090,8 +2112,7 @@ def generate_stavka_orders(opfor_count: int = -1):
         else:
             logger.warning("Stavka: LLM returned empty content")
     except Exception as e:
-        logger.error(f"Stavka generation failed: {e}")
-        app_state["errors"] += 1
+        _record_error("stavka", e)
 
     return {"orders": []}
 
@@ -2149,8 +2170,7 @@ async def startup_event():
             if response.voice_reply:
                 tts_handler.speak(response.voice_reply, member_index=0)
         except Exception as e:
-            logger.error(f"[VOICE] Order processing failed: {e}")
-            app_state["errors"] += 1
+            _record_error("voice_order", e)
 
     voice_handler._on_transcription = _on_voice_transcription
     if voice_handler.enabled:
