@@ -483,6 +483,92 @@ def test_dead_member_does_not_speak():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_10.json").unlink(missing_ok=True)
 
 
+def test_rank_promotion_by_deeds():
+    print("test_rank_promotion_by_deeds")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_11.json").unlink(missing_ok=True)
+    bridge.ensure_soldier_identity("Kilo_11")
+    m = bridge.load_soldier_memory("Kilo_11")
+    base_rank = m["identity"]["rank"]
+    base_idx = bridge.RANKS.index(base_rank)
+    check("test soldier not already top rank", base_idx < len(bridge.RANKS) - 1, base_rank)
+    if base_idx >= len(bridge.RANKS) - 1:
+        return
+    # score = kills*2 + battles*3; give EXACTLY the next rank's threshold
+    # (thresholds are even, so kills = threshold/2 with 0 battles)
+    target_score = bridge.RANK_SCORE_THRESHOLDS[base_idx + 1]
+    m["kills"] = target_score // 2
+    m["battles_survived"] = 0
+    bridge.save_soldier_memory("Kilo_11", m)
+    new_rank = bridge.check_rank_progression("Kilo_11")
+    m = bridge.load_soldier_memory("Kilo_11")
+    check("promoted one rank", bool(new_rank) and bridge.RANKS.index(new_rank) == base_idx + 1, f"{base_rank}->{new_rank}")
+    check("rank persisted in identity", m["identity"]["rank"] == new_rank)
+    check("promotion event logged", any(e.get("type") == "promotion" for e in m["events"]))
+    check("battle log updated", any("promoted" in e for e in bridge.app_state["battle_log"]))
+    check("no double promotion on recheck", bridge.check_rank_progression("Kilo_11") == "")
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_11.json").unlink(missing_ok=True)
+
+
+def test_multi_rank_promotion():
+    print("test_multi_rank_promotion")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_14.json").unlink(missing_ok=True)
+    bridge.ensure_soldier_identity("Kilo_14")
+    m = bridge.load_soldier_memory("Kilo_14")
+    if bridge.RANKS.index(m["identity"]["rank"]) >= len(bridge.RANKS) - 1:
+        bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_14.json").unlink(missing_ok=True)
+        return  # base rank already SGT - nothing to jump to
+    # score = 8*2 + 3*3 = 25, above every threshold -> jumps to SGT in one check
+    m["kills"] = 8
+    m["battles_survived"] = 3
+    bridge.save_soldier_memory("Kilo_14", m)
+    new_rank = bridge.check_rank_progression("Kilo_14")
+    check("jumps to SGT from any base", new_rank == "SGT", f"->{new_rank}")
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_14.json").unlink(missing_ok=True)
+
+
+def test_no_promotion_below_threshold():
+    print("test_no_promotion_below_threshold")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_13.json").unlink(missing_ok=True)
+    bridge.ensure_soldier_identity("Kilo_13")
+    m = bridge.load_soldier_memory("Kilo_13")
+    rank_before = m["identity"]["rank"]
+    m["kills"] = 1  # score 2 < 4
+    m["battles_survived"] = 0
+    bridge.save_soldier_memory("Kilo_13", m)
+    check("no promotion below threshold", bridge.check_rank_progression("Kilo_13") == "")
+    m = bridge.load_soldier_memory("Kilo_13")
+    check("rank unchanged", m["identity"]["rank"] == rank_before)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_13.json").unlink(missing_ok=True)
+
+
+def test_replacement_resets_rank_and_deeds():
+    print("test_replacement_resets_rank_and_deeds")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_12.json").unlink(missing_ok=True)
+    m = bridge.load_soldier_memory("Kilo_12")
+    bridge.ensure_soldier_identity("Kilo_12")
+    m = bridge.load_soldier_memory("Kilo_12")
+    m["identity"]["rank"] = "SGT"
+    m["kills"] = 9
+    m["battles_survived"] = 4
+    m["status"] = "dead"
+    m["death_date"] = "2026-08-13T00:00:00"
+    bridge.save_soldier_memory("Kilo_12", m)
+    bridge.app_state["last_squad_names"] = []
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["last_sitrep"] = make_sitrep(["Kilo_12"])
+    bridge.app_state["last_sitrep_time"] = time.time()
+    bridge.app_state["last_thought_fingerprint"] = None
+    bridge.app_state["cached_thoughts"] = None
+    fake = FakeClient(['{"thought": "Big boots to fill", "mood": "calm"}'])
+    bridge.client = fake
+    bridge.generate_ai_thoughts("idle")
+    m = bridge.load_soldier_memory("Kilo_12")
+    check("replacement rank reset to base", m["identity"]["rank"] == bridge._base_rank("Kilo_12"), m["identity"]["rank"])
+    check("replacement deeds reset", m["kills"] == 0 and m["battles_survived"] == 0)
+    check("legacy keeps predecessor stats", "9" in (m.get("legacy") or "") and "4" in (m.get("legacy") or ""))
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_12.json").unlink(missing_ok=True)
+
+
 def test_session_boundary_resets_squad_state():
     print("test_session_boundary_resets_squad_state")
     # SITREP gap > 90s = player disconnected, new session. The old session's
@@ -569,6 +655,11 @@ def run_tests():
     test_dead_member_does_not_speak()
     test_session_boundary_resets_squad_state()
     test_replacement_resurrection_and_legacy()
+    print("=== B.2 rank progression unit tests ===")
+    test_rank_promotion_by_deeds()
+    test_multi_rank_promotion()
+    test_no_promotion_below_threshold()
+    test_replacement_resets_rank_and_deeds()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()

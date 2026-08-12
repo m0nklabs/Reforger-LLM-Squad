@@ -343,6 +343,56 @@ def _name_hash(name: str, salt: str) -> int:
     return int(hashlib.md5((name + salt).encode()).hexdigest(), 16)
 
 
+def _base_rank(name: str) -> str:
+    """B.2: the deterministic (hash-derived) rank a soldier starts at.
+    Promotions update identity.rank; a replacement starts over at base."""
+    return RANKS[_name_hash(name, "rank") % len(RANKS)]
+
+
+# ─── B.2: Rank progression ────────────────────────────────────────────
+# Deeds -> promotion. score = kills*2 + battles_survived*3. Thresholds per
+# rank index (index 0 = PVT, 4 = SGT): reaching a threshold promotes one
+# rank. Changes identity (prompt voice) + squadmate opinions. Death resets.
+RANK_SCORE_THRESHOLDS = [0, 4, 8, 12, 16]  # PFC=4, SPC=8, CPL=12, SGT=16
+
+
+def _deeds_score(mem: dict) -> int:
+    return mem.get("kills", 0) * 2 + mem.get("battles_survived", 0) * 3
+
+
+def check_rank_progression(name: str) -> str:
+    """B.2: promote a soldier if their deeds passed the next rank threshold(s).
+    Returns the new rank (or "" if unchanged). Deeds are cumulative - a single
+    check promotes as far as the score allows. Updates identity + event log
+    + battle memory. Caller nudges squadmate opinions on promotion."""
+    mem = load_soldier_memory(name)
+    if mem.get("status") != "alive":
+        return ""
+    identity = mem.get("identity")
+    if not identity:
+        ensure_soldier_identity(name)
+        mem = load_soldier_memory(name)
+        identity = mem.get("identity", {})
+    try:
+        idx = RANKS.index(str(identity.get("rank", "PVT")))
+    except ValueError:
+        idx = 0
+    score = _deeds_score(mem)
+    # Promote as far as the score allows (max SGT)
+    while idx < len(RANKS) - 1 and score >= RANK_SCORE_THRESHOLDS[idx + 1]:
+        idx += 1
+    new_rank = RANKS[idx]
+    if new_rank == identity.get("rank"):
+        return ""  # no promotion
+    identity["rank"] = new_rank
+    mem["identity"] = identity
+    save_soldier_memory(name, mem)
+    log_soldier_event(name, "promotion", f"Promoted to {new_rank} after {mem.get('kills', 0)} kill(s) and {mem.get('battles_survived', 0)} battle(s)")
+    add_battle_event("ORDER", f"{name} promoted to {new_rank}")
+    logger.info(f"[B.2] {name} promoted to {new_rank} (score {score})")
+    return new_rank
+
+
 def ensure_soldier_identity(name: str) -> dict:
     """Generate (once) and return a soldier's identity + backstory.
     Deterministic per name: same name always gets the same identity.
@@ -594,6 +644,7 @@ RELATIONSHIP_EVENTS = {
     "leader_downed": ("worry", +1, "leader is down"),
     "leader_recovered": ("trust", +1, "leader came back"),
     "order_change": ("adapt", +1, "handled new orders"),
+    "promotion": ("respect", +2, "earned a promotion"),  # B.2: squad notices
 }
 
 # Personality friction: how one personality views another. Positive = bonus,
@@ -1140,6 +1191,13 @@ def generate_ai_thoughts(event: str = ""):
                 f"The previous {m.name} was KIA on {death_date} with {kills} confirmed kill(s) "
                 f"after {battles} battle(s). The squad remembers them - you are filling their boots."
             )
+            # B.2: a replacement starts fresh - base rank, no kills/battles.
+            # The predecessor's stats live on in the legacy string above.
+            identity = mem.get("identity") or {}
+            identity["rank"] = _base_rank(m.name)
+            mem["identity"] = identity
+            mem["kills"] = 0
+            mem["battles_survived"] = 0
             save_soldier_memory(m.name, mem)
             log_soldier_event(m.name, "replacement", f"Replacement soldier takes over {m.name} - predecessor KIA")
             add_battle_event("ORDER", f"Replacement soldier arrived for {m.name}")
@@ -1202,7 +1260,14 @@ def generate_ai_thoughts(event: str = ""):
     
     # F8.4: Update social bonds/opinions from this shared event
     # (alive members only - dead ones must keep the "mourned" relationship)
-    update_social_bonds(event, [m.name for m in sitrep.squad if m.alive])
+    alive_names = [m.name for m in sitrep.squad if m.alive]
+    update_social_bonds(event, alive_names)
+
+    # B.2: Rank progression - deeds earn promotions. Squadmates notice
+    # (promotion nudge on relationships/opinions).
+    promoted = [check_rank_progression(name) for name in alive_names]
+    if any(promoted):
+        update_social_bonds("promotion", alive_names)
     
     # Cleanup old dead soldier files
     cleanup_dead_soldiers()

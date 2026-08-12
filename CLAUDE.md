@@ -129,6 +129,7 @@ Never invent these — every single one has already gone wrong once:
 68. **Session boundary reset (B.1)**: a SITREP gap > 90s = player disconnected / new session. `_check_session_boundary()` (called in `receive_sitrep`) clears `last_squad_names` + `missing_soldiers` so a reconnect with a different squad composition does NOT false-KIA the previous session's absentees.
 69. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
 70. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
+71. **B.2 rank promotion is cumulative (FIXED)**: `check_rank_progression()` originally promoted ONE rank per call — a soldier with score 18 (enough for SGT) climbed PVT→PFC only. Deeds accumulate, so a single check must promote as far as the score allows (`while` loop to SGT). Unit test `test_multi_rank_promotion` guards this.
 
 ## Skills (detail docs — read when working in that area)
 - Reforger mod structure/loading/GUIDs → `@docs/skills/arma-reforger-modding.md`
@@ -174,6 +175,7 @@ Never invent these — every single one has already gone wrong once:
 - **Slave group waypoint fix**: ExecuteWaypoint/ClearSquadWaypoints/GetSquadPosition now use FindAIGroup() which targets the SLAVE group (where AI agents live) instead of the MASTER group. SetGroupFormation also fixed to target slave group.
 - **Web Dashboard** (`GET /dashboard`): Fixed header/left/right/footer grid layout, dark mode (toggle), mobile responsive. Command buttons: spawn reinforcements, hold, move (E/W/N/S + custom dx/dz), follow, formation, medic, despawn, despawn_opfor. Polls /health (3s), /status (5s), /soldiers (10s). SITREP squad cards, enemy contacts, battle log, AI thoughts, soldier roster panels.
 - **B.1 Legacy & mourning (bridge side)**: death detection with two evidence signals — CONFIRMED (`alive:false` per SITREP member, new field, default True) marks dead immediately; MISSING for `game.death_grace_cycles` (2, config) consecutive thought cycles marks dead after a grace period (protects against transient gaps from respawn re-link/despawn). On death: soldier archived to graveyard with final stats, squadmates get `teammate_kia` grief event + "mourned" relationship + grief opinion (deduped — no re-archive/re-grief churn), dead members stop generating thoughts, adjutant situation text shows `[KIA]`. Replacement with the same callsign resurrects with predecessor legacy ("filling their boots", fed into system prompts). Session-boundary reset (SITREP gap > 90s) prevents false KIA across reconnect. Unit tests: confirmed death, grace period, reappearance, dedup, session boundary, dead-don't-speak. REMAINING (game-side, V.1): `SendSITREP()` must send per-member `alive` (rule 63) — today the fixed 5-member array keeps the missing-name path dormant.
+- **B.2 Rank progression**: deeds = `kills*2 + battles_survived*3`; thresholds PFC=4/SPC=8/CPL=12/SGT=16 (config in `RANK_SCORE_THRESHOLDS`). `check_rank_progression()` runs every thought cycle for alive members and promotes as far as the score allows (multi-rank jumps OK). Rank lives in `identity.rank` → automatically changes prompt voice (`get_soldier_identity_summary`) + dashboard. Promotion logs a soldier event + battle-log ORDER event and nudges squadmate relationships (+2 respect via new `promotion` social event). Death resets: a replacement resurrects at their hash-derived base rank with kills/battles zeroed (predecessor stats stay in the legacy string). Unit tests: exact-threshold promotion, multi-rank jump to SGT, no promotion below threshold, replacement reset.
 
 ### Development roadmap
 
@@ -191,8 +193,8 @@ F8.1–F8.11 are done (see Completed). The list below is the forward path, order
 *Phase A is COMPLETE (A.1–A.4 done). Forward path continues at Phase B.*
 
 #### Phase B — DEPTH (memory & consequences)
-*B.1 is done (bridge side, see Completed). Forward path:*
-- **B.2 Rank progression**: Kills + battles survived → promotion (PVT→PFC→SPC→CPL→SGT). Changes identity, prompt voice, and squadmate opinions. Death resets.
+*B.1 and B.2 are done (bridge side, see Completed). Forward path:*
+- **B.3 Mood affects gameplay**: Nervous/panicked soldiers get reduced accuracy or movement delay (game-side modifier based on memory mood) — mood becomes mechanical, not cosmetic.
 - **B.3 Mood affects gameplay**: Nervous/panicked soldiers get reduced accuracy or movement delay (game-side modifier based on memory mood) — mood becomes mechanical, not cosmetic.
 - **B.4 Fatigue & session memory**: Long sessions degrade mood/performance; soldiers remember previous deployments (persistent across bridge restarts via existing JSON files).
 - **B.5 After-action report**: On session end (player disconnect), bridge writes a battle report (kills, casualties, opinions formed, battles survived) to `reports/` and feeds highlights into the next session's prompts.
