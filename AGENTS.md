@@ -143,40 +143,68 @@ Never invent these — every single one has already gone wrong once:
 - **F7**: Individual AI soldier memory (`ai_soldiers/{name}.json` per soldier)
 - **Event-driven thoughts** (contact/clear/order_change/casualty/idle, 15s cooldown)
 - **F8.1**: Soldier identity + backstory (deterministic, personality-matched) + per-soldier conversation history
+- **F8.2**: Per-soldier conversation history — `thought_history` (rolling 10) per soldier, own thoughts as context (continuity, no amnesia)
+- **F8.3**: Soldier tools — report_contact/report_clear/request_orders/report_status/call_medic/suggest_tactic → real orders (medic/formation) + battle_log events; agents, not commentators
+- **F8.3b**: Tool calls visible in-game (radio chat) + leader_downed/leader_recovered thought events from game side
+- **F8.4**: Social dynamics — bonds & opinions from shared events, personality friction (VETERAN↔ROOKIE etc.)
+- **F8.5**: Kill attribution from enemy_count drops + enriched roster (rank/role/relationships/opinions)
+- **F8.6**: Anti-parrot prompt + chain of command (CO = player)
+- **F8.7**: Adjutant sees squad psyche (mood + last_thought in situation text) — full layered chain
+- **F8.8**: Opinion refresh on score change + graveyard section in dashboard
+- **F8.9**: Audible soldier tool calls via TTS with per-soldier voices
+- **F8.10**: Soldier detail panel in dashboard (backstory, event log, thought history)
+- **F8.11**: Voice/STT status panel in dashboard (PTT key, model state, last transcription)
+- **Bugfix rounds 1-3**: 20+ fixes — TTS/voice never started, event-shift bug, despawn/respawn/playerID, IndexOfFrom(-1) guards, JSON parse hardening, name sanitizer, PTT races, TTS loop race, check_latest_log.ps1 filter (see rules 42-58)
 - **Dynamic faction** (squad + OPFOR adapt to player faction)
 - **Faction fix** (FactionManager.GetPlayerFaction, not group components)
 - **Slave group waypoint fix**: ExecuteWaypoint/ClearSquadWaypoints/GetSquadPosition now use FindAIGroup() which targets the SLAVE group (where AI agents live) instead of the MASTER group. SetGroupFormation also fixed to target slave group.
 - **Web Dashboard** (`GET /dashboard`): Fixed header/left/right/footer grid layout, dark mode (toggle), mobile responsive. Command buttons: spawn reinforcements, hold, move (E/W/N/S + custom dx/dz), follow, formation, medic, despawn, despawn_opfor. Polls /health (3s), /status (5s), /soldiers (10s). SITREP squad cards, enemy contacts, battle log, AI thoughts, soldier roster panels.
 
 ### Development roadmap
-- **F7: Individual AI Soldier Memory (IMPLEMENTED)**: Each soldier gets personal JSON memory file (`ai_soldiers/{name}.json`). Tracks: name, personality, birth_date, personal event log (50 max), opinions, mood, relationships, kills, battles survived, status (alive/dead). Death = retain 7 days → archive to `graveyard/`. Thoughts generated from personal history.
 
-- **F8.1: Soldier Identity + Backstory (IMPLEMENTED)**: Deterministic identity per soldier (rank, role, age, origin, deployments, time in theater) + generated backstory matching their personality. Stored in memory file (`identity` + `backstory` fields). Identity + backstory + own thought history are fed into every thought-generation prompt (rank/role-aware voices).
-- **F8.2: Per-soldier conversation history (IMPLEMENTED)**: `thought_history` (rolling 10) in each soldier's memory file. Previous own thoughts are included as context in the next generation, so soldiers have continuity instead of amnesia.
-- **F8.1 bugfix: thoughts now actually generate**: The F7 rewrite accidentally deleted the LLM call + return in `generate_ai_thoughts()` (always returned `[]`). Restored with robust `extract_json_block()` — the Ollama proxy sometimes prepends prose/wraps JSON in ```json fences, which broke `json.loads()`.
-- **F8.3: Soldier Tools — agents trigger game logic (IMPLEMENTED)**: Soldiers may emit an optional `tool` field in their thought JSON. Tools: `report_contact(direction, distance, count)`, `report_clear()`, `request_orders()`, `report_status(health, ammo)`, `call_medic(target)` → queues a MEDIC order, `suggest_tactic(formation, direction)` → queues a FORMATION order. Tool calls become real entries in `pending_orders` (game polls /orders every 2s) or battle_log events — soldiers are agents, not commentators.
-- **F8.3b: Tool calls visible in-game (IMPLEMENTED)**: `LLMBridge.c ProcessThoughts()` now parses the optional `tool` field and appends `(tool_name)` to the radio-chat message. Game-side event detection extended with `leader_downed`/`leader_recovered` (via `GetPlayerLifeState()` + `m_sLastLeaderState`) — the bridge already supported those events, the game now triggers them.
-- **F8.4: Social dynamics — bonds & opinions (IMPLEMENTED)**: Soldiers now build relationships from shared events. Each event (contact/clear/casualty/leader_downed/...) nudges a sentiment score toward every squadmate, modified by personality friction (VETERAN↔ROOKIE, CAUTIOUS↔AGGRESSIVE/JOKER). Strong scores materialize as stored opinions (brother-in-arms/trusted/reliable/okay/reckless/unpredictable), fed into thought prompts via `get_social_summary()`. The `relationships`/`opinions` fields in memory files are now actually used.
-- **F8.5: Kill attribution + enriched roster (IMPLEMENTED)**: When SITREP `enemy_count` drops, the squad gets credited — kills are attributed round-robin to squad members (per-soldier `kills` counter + `kill` event in memory, battle_log entry). `/soldiers` now returns rank/role/relationships/opinions; dashboard roster shows rank, role, personality, mood, relationship badges and latest opinion.
-- **F8.6: Anti-parrot + chain of command (IMPLEMENTED)**: Thought prompt now explicitly forbids repeating own earlier thoughts (the model was parroting its own thought_history — "Time to put our money where our mouth is" every round). System prompt also establishes the CO = the player; soldiers address the CO and wait for orders.
-- **F8.7: Adjutant sees squad psyche (IMPLEMENTED)**: `get_situation_text()` now includes each soldier's `mood` + `last_thought` — the order-issuing LLM knows how the squad feels (nervous rookie, impatient aggressor), not just positions. Full chain: soldiers think (identity/backstory/relationships) → soldiers act (tools) → adjutant sees moods/thoughts → adjutant orders → game executes.
-- **F8.8: Opinion refresh + graveyard in dashboard (IMPLEMENTED)**: Opinions now UPDATE when the relationship score crosses into a new label (reliable → brother-in-arms) instead of freezing on the first label. `/soldiers` returns `graveyard` (archived KIA); dashboard shows a faded KIA section below the roster.
-- **F8.9: Audible soldier tool calls (IMPLEMENTED)**: `report_contact` → spoken "Contact! N hostiles, X meters, DIR!" and `call_medic` → "Medic! TARGET is down!" via TTS with the soldier's own voice (Alpha_N → voice index N-1).
-- **F8.10: Soldier detail panel in dashboard (IMPLEMENTED)**: `/soldiers?detail=1` returns full event log + thought history + identity (age/origin/deployments). Clicking a roster item opens a detail panel with backstory, meta, event log and recent thoughts.
-- **F8.11: Voice status panel in dashboard (IMPLEMENTED)**: Live STT status — PTT key, Whisper model, running/recording indicator (green/red dot) and the last transcription with age. Polls /voice every 5s.
-- **F8: AI Soldiers as Autonomous Agents (VISION)**: Evolution of F7. Each AI soldier is an autonomous LLM agent with:
-  - **Identity System Prompt**: Name, faction, rank, role, chain of command (CO = player), squadmates, expectations
-  - **Backstory**: Personal history (age, origin, time in theater, prior deployments, personality traits). From game data or generated at spawn. A rookie sounds different from a veteran.
-  - **Available Tools**: The soldier LLM can call tools to interact with the game world:
-    - `report_contact(direction, distance, count)` — report enemy sighting to squad
-    - `report_clear()` — report area is clear
-    - `request_orders()` — ask CO for new orders
-    - `report_status(health, ammo)` — report own condition
-    - `call_medic(target)` — request medical help for a squadmate
-    - `suggest_tactic(formation, direction)` — suggest a tactical change
-  - **Agent, not commentator**: Observe → decide → act. Thoughts are one output; tool calls trigger game logic.
-  - **Per-soldier conversation history**: Each soldier maintains their own LLM messages array (not just flat event log).
-  - **Game backstory integration**: Use Reforger's character entity backstory/lore in system prompt if available.
+North star: **F8 — AI soldiers as autonomous agents** (observe → decide → act).
+F8.1–F8.11 are done (see Completed). The list below is the forward path, ordered by priority.
+
+---
+
+#### Phase V — VALIDATE (do this FIRST; everything since F6 is untested live)
+- **V.1 LIVE TEST SESSION**: Connect client to `127.0.0.1:2001`, play 15+ min. Verify: auto-squad spawns 5 AI, SITREPs flow (bridge /health players_active=true), thoughts appear in radio chat, tool calls fire, medic/formation orders execute, respawn re-links squad (rule 52 fix), despawn actually removes AI (rule 51 fix). Fix whatever breaks — this is the current #1 risk.
+- **V.2 Voice test with real mic**: Caps Lock PTT → Whisper → order → TTS reply. Verify the race fixes (rules 54-55) hold under real usage.
+- **V.3 Battlefield sanity**: enemy contact → thought event "contact" fires within 15s (rule 45 fix), leader downed → leader_downed event + MEDIC order (rule 49 fix).
+
+#### Phase A — AGENT CORE (the real F8: per-soldier LLM agents)
+- **A.1 Per-soldier LLM messages array**: Replace the single shared thought-call with ONE conversation per soldier: `{"name", "role":"system", "content": identity+backstory+CoC}` + own `thought_history` + current situation. Generate per-soldier (4 calls) or batched. This is the missing piece of the F8 vision ("not just flat event log").
+- **A.2 Soldier-to-soldier chatter**: Soldiers react to EACH OTHER's thoughts (Alpha_3's nervousness gets a response from Alpha_2), not just to the situation. Requires A.1 (own history incl. squadmate thoughts).
+- **A.3 Tool consequence awareness**: After a tool call fires, the RESULT (order queued / battle_log entry) is fed back into the soldier's next prompt — soldiers learn their actions have effects.
+- **A.4 Game backstory integration (research)**: Check if Reforger character identity/lore is readable from script (CharacterIdentityComponent — see local API zip). If yes, feed into system prompt; if not, mark as permanently N/A.
+
+#### Phase B — DEPTH (memory & consequences)
+- **B.1 Legacy & mourning**: On soldier death, squadmates get a grief event + opinion about the fallen; graveyard entry gets final stats; replacement soldier arrives with the squad's memory of their predecessor ("you're filling Alpha_2's boots").
+- **B.2 Rank progression**: Kills + battles survived → promotion (PVT→PFC→SPC→CPL→SGT). Changes identity, prompt voice, and squadmate opinions. Death resets.
+- **B.3 Mood affects gameplay**: Nervous/panicked soldiers get reduced accuracy or movement delay (game-side modifier based on memory mood) — mood becomes mechanical, not cosmetic.
+- **B.4 Fatigue & session memory**: Long sessions degrade mood/performance; soldiers remember previous deployments (persistent across bridge restarts via existing JSON files).
+- **B.5 After-action report**: On session end (player disconnect), bridge writes a battle report (kills, casualties, opinions formed, battles survived) to `reports/` and feeds highlights into the next session's prompts.
+
+#### Phase C — IMMERSION (radio, audio, UI)
+- **C.1 In-game radio → STT**: Route Reforger's actual radio/VOIP audio to the bridge for transcription (mod-side audio capture). Big effort; only if V.2 shows PTT is unsatisfying.
+- **C.2 Radio chatter layer**: Random short squad radio chatter ("Alpha 2, moving up", "clear left") voiced via TTS during quiet periods — the squad sounds alive, not just when events fire.
+- **C.3 Per-soldier voice selection in dashboard**: Choose/override each soldier's edge-tts voice (currently fixed by index).
+- **C.4 Commander map view**: Dashboard mini-map (squad + enemy positions from SITREP offsets) instead of text-only.
+- **C.5 Suggestion approval flow**: `suggest_tactic` appears in dashboard as a pending suggestion (ACCEPT/REJECT) instead of auto-executing — CO stays in command.
+
+#### Phase D — STRATEGY & MODEL
+- **D.1 Stavka re-enable (optional)**: Turn OPFOR strategic AI back on IF the vanilla 23_Campaign OPFOR proves too passive. Must fix the IndexOfFrom(-1) guards (rule 57) first.
+- **D.2 Better LLM model**: llama3.2-3b limits thought quality (schema drift, rule 40). Evaluate a 7-14B model on the LAN proxy (faster_whisper stays tiny). Measure: valid-JSON rate, tool-call rate, parrot rate.
+- **D.3 Bridge resilience**: auto-restart bridge if health check fails (currently manual); backlog pending_orders across restarts.
+
+#### Phase E — HYGIENE
+- **E.1 requirements.txt clean install test**: fresh venv + `pip install -r requirements.txt` must produce a working bridge (deps were missing once — rule 42).
+- **E.2 Config-driven tuning**: move magic numbers (thought cooldowns, health thresholds, kill thresholds) to config.json.
+- **E.3 Error surfacing**: /health should expose last N bridge exceptions with tracebacks (currently only a counter) for faster diagnosis.
+
+---
+
+**Priority order**: V → A → B → C (pick per interest) → D → E. V.1 is non-negotiable before claiming any new feature works.
 
 ## References
 - `MOD_SETUP.md` — launch error diagnosis
