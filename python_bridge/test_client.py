@@ -215,6 +215,46 @@ def test_tts():
         print(f"[FAIL] {e}")
         return False
 
+def test_status():
+    """Test /status GET (dashboard live view — regressed once: 500 when
+    app_state held the chatter asyncio.Task, rule 84). Pure GET, no LLM."""
+    print("\n=== Test: Status (dashboard live view) ===")
+    try:
+        resp = requests.get(f"{BRIDGE_URL}/status", timeout=5)
+        data = resp.json()
+        state = data.get("state", {})
+        print(f"  HTTP {resp.status_code}, state keys: {len(state)}")
+        print(f"  battle_log: {len(state.get('battle_log', []))} entries")
+        print(f"  last_leader_state: {state.get('last_leader_state', '?')}")
+        print(f"  last_sitrep: {data.get('last_sitrep')}")
+        if resp.status_code == 200 and "battle_log" in state and "last_leader_state" in state:
+            print("[PASS] /status returns the dashboard live view")
+            return True
+        print("[FAIL] /status shape unexpected")
+        return False
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
+
+def test_suggestions():
+    """Test /suggestions GET (C.5 CO approval panel). Pure GET, no LLM."""
+    print("\n=== Test: Suggestions (CO approval panel) ===")
+    try:
+        resp = requests.get(f"{BRIDGE_URL}/suggestions", timeout=5)
+        data = resp.json()
+        sugs = data.get("suggestions", [])
+        print(f"  HTTP {resp.status_code}, suggestions: {len(sugs)}")
+        if resp.status_code == 200 and isinstance(sugs, list):
+            print("[PASS] /suggestions returns the suggestion list")
+            return True
+        print("[FAIL] /suggestions shape unexpected")
+        return False
+    except Exception as e:
+        print(f"[FAIL] {e}")
+        return False
+
+
 def test_latency():
     """Measure end-to-end latency for SITREP -> LLM -> response"""
     print("\n=== Test: Latency ===")
@@ -276,6 +316,8 @@ def main():
             "stavka": test_stavka,
             "voice": test_voice,
             "tts": test_tts,
+            "status": test_status,
+            "suggestions": test_suggestions,
             "latency": test_latency,
         }
         if test_name in test_map:
@@ -295,6 +337,8 @@ def main():
     results.append(("Stavka", test_stavka()))
     results.append(("Voice", test_voice()))
     results.append(("TTS", test_tts()))
+    results.append(("Status", test_status()))
+    results.append(("Suggestions", test_suggestions()))
     results.append(("Latency", test_latency()))
 
     # Summary
