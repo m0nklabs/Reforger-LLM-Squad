@@ -94,6 +94,9 @@ Never invent these — every single one has already gone wrong once:
 33. **F5: Battle Memory**: Bridge maintains rolling `battle_log` (15 events) in `app_state`. Included in LLM prompt. Events: ORDER, CONTACT, CRITICAL, RECOVERY.
 34. **F6: Medic Rescue (IMPLEMENTED)**: `leader_state` (alive/downed/dead) in SITREP JSON + fingerprint. MEDIC action in LLM enum. Detection via `SCR_DamageManagerComponent` (rule 28).
 35. **Event-driven thoughts**: Replaced 30s timer with event detection. Thoughts trigger on: contact, clear, order_change, casualty, idle (60s fallback). 15s cooldown.
+36. **`generate_ai_thoughts()` LLM call**: The F7 rewrite accidentally deleted the LLM call + return (function always returned `[]`). Restored. ALWAYS verify a function's return path after a refactor that touches it.
+37. **Ollama proxy JSON output**: `response_format=json_object` is NOT reliable — proxy may prepend prose or wrap in ```json fences. Always parse LLM JSON via `extract_json_block()` (first `{...}` span, fence stripping), never raw `json.loads()`.
+38. **Two bridge processes trap**: `start_bridge.bat` + manual starts can leave TWO bridges running (venv + uv python). Old one holds port 5001; new code never activates. Check `Get-CimInstance Win32_Process` for multiple `main.py` before debugging weird behavior.
 36. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
 37. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
 
@@ -119,6 +122,7 @@ Never invent these — every single one has already gone wrong once:
 - **F6**: Medic Rescue (leader_state tracking, MEDIC action, downed detection via SCR_DamageManagerComponent)
 - **F7**: Individual AI soldier memory (`ai_soldiers/{name}.json` per soldier)
 - **Event-driven thoughts** (contact/clear/order_change/casualty/idle, 15s cooldown)
+- **F8.1**: Soldier identity + backstory (deterministic, personality-matched) + per-soldier conversation history
 - **Dynamic faction** (squad + OPFOR adapt to player faction)
 - **Faction fix** (FactionManager.GetPlayerFaction, not group components)
 - **Slave group waypoint fix**: ExecuteWaypoint/ClearSquadWaypoints/GetSquadPosition now use FindAIGroup() which targets the SLAVE group (where AI agents live) instead of the MASTER group. SetGroupFormation also fixed to target slave group.
@@ -127,6 +131,9 @@ Never invent these — every single one has already gone wrong once:
 ### Development roadmap
 - **F7: Individual AI Soldier Memory (IMPLEMENTED)**: Each soldier gets personal JSON memory file (`ai_soldiers/{name}.json`). Tracks: name, personality, birth_date, personal event log (50 max), opinions, mood, relationships, kills, battles survived, status (alive/dead). Death = retain 7 days → archive to `graveyard/`. Thoughts generated from personal history.
 
+- **F8.1: Soldier Identity + Backstory (IMPLEMENTED)**: Deterministic identity per soldier (rank, role, age, origin, deployments, time in theater) + generated backstory matching their personality. Stored in memory file (`identity` + `backstory` fields). Identity + backstory + own thought history are fed into every thought-generation prompt (rank/role-aware voices).
+- **F8.2: Per-soldier conversation history (IMPLEMENTED)**: `thought_history` (rolling 10) in each soldier's memory file. Previous own thoughts are included as context in the next generation, so soldiers have continuity instead of amnesia.
+- **F8.1 bugfix: thoughts now actually generate**: The F7 rewrite accidentally deleted the LLM call + return in `generate_ai_thoughts()` (always returned `[]`). Restored with robust `extract_json_block()` — the Ollama proxy sometimes prepends prose/wraps JSON in ```json fences, which broke `json.loads()`.
 - **F8: AI Soldiers as Autonomous Agents (VISION)**: Evolution of F7. Each AI soldier is an autonomous LLM agent with:
   - **Identity System Prompt**: Name, faction, rank, role, chain of command (CO = player), squadmates, expectations
   - **Backstory**: Personal history (age, origin, time in theater, prior deployments, personality traits). From game data or generated at spawn. A rookie sounds different from a veteran.

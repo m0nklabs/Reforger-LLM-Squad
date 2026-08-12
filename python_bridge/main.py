@@ -211,6 +211,10 @@ def load_soldier_memory(name: str) -> dict:
         "relationships": {},  # {"Alpha_2": "trusted", "Alpha_3": "annoying"}
         "kills": 0,
         "battles_survived": 0,
+        # F8.1: Identity + backstory (generated on first access by ensure_soldier_identity)
+        "identity": None,
+        "backstory": None,
+        "thought_history": [],  # F8.1: own thoughts, rolling window of 10
     }
 
 def save_soldier_memory(name: str, memory: dict):
@@ -297,6 +301,109 @@ def get_soldier_history_summary(name: str, max_events: int = 5) -> str:
         lines.append(f"Current mood: {mood}")
     
     return "\n".join(lines)
+
+
+# ─── F8.1: Soldier Identity + Backstory ─────────────────────────────────
+# Deterministic identity generation (hash-based, like personalities):
+# rank, role, age, origin, deployments, backstory. Generated once per soldier
+# on first access, stored in their memory file. Same name → same identity.
+
+RANKS = ["PVT", "PFC", "SPC", "CPL", "SGT"]
+ROLES = [
+    "Rifleman", "Automatic Rifleman", "Grenadier",
+    "Medic", "Team Leader", "Designated Marksman"
+]
+ORIGINS = [
+    "Texas", "Ohio", "Georgia", "California", "Pennsylvania",
+    "Arizona", "New York", "Montana", "Kentucky", "Florida"
+]
+
+# Backstory templates keyed by personality trait (filled with role/deployments)
+BACKSTORY_TEMPLATES = {
+    "AGGRESSIVE": "grew up hunting in {origin} and joined to fight, not to stand guard. {deploy} deployments taught them that the best defense is a fast, loud offense.",
+    "CAUTIOUS": "a careful {origin} native who survived {deploy} deployment(s) by trusting cover and patience over heroics. Every corner hides something.",
+    "JOKER": "from {origin}, keeps morale up with dark jokes. {deploy} deployment(s) in and still laughing — because crying is bad for aiming.",
+    "VETERAN": "old hand from {origin} with {deploy} deployment(s) behind them. Seen everything, fears nothing except paperwork.",
+    "ROOKIE": "fresh out of training from {origin}. This is their first deployment and they're trying hard not to look scared.",
+    "STEADY": "quiet professional from {origin}. {deploy} deployment(s) of doing the job right, no drama, no mistakes.",
+}
+
+
+def _name_hash(name: str, salt: str) -> int:
+    import hashlib
+    return int(hashlib.md5((name + salt).encode()).hexdigest(), 16)
+
+
+def ensure_soldier_identity(name: str) -> dict:
+    """Generate (once) and return a soldier's identity + backstory.
+    Deterministic per name: same name always gets the same identity.
+    Migrates existing memory files by adding the identity block."""
+    mem = load_soldier_memory(name)
+    if mem.get("identity") and mem.get("backstory"):
+        return mem
+
+    personality = mem.get("personality") or app_state["ai_personalities"].get(name, "STEADY")
+
+    rank = RANKS[_name_hash(name, "rank") % len(RANKS)]
+    role = ROLES[_name_hash(name, "role") % len(ROLES)]
+    origin = ORIGINS[_name_hash(name, "origin") % len(ORIGINS)]
+    age = 21 + (_name_hash(name, "age") % 18)          # 21..38
+    deployments = 1 + (_name_hash(name, "deploy") % 3)  # 1..3
+    months = 2 + (_name_hash(name, "months") % 22)      # 2..23 in theater
+
+    template = BACKSTORY_TEMPLATES.get(personality, BACKSTORY_TEMPLATES["STEADY"])
+    backstory = template.format(origin=origin, deploy=deployments)
+    backstory = backstory[:1].upper() + backstory[1:]  # sentence case
+
+    mem["identity"] = {
+        "rank": rank,
+        "role": role,
+        "age": age,
+        "origin": origin,
+        "time_in_theater_months": months,
+        "deployments": deployments,
+    }
+    mem["backstory"] = backstory
+    mem["thought_history"] = mem.get("thought_history", [])  # F8.1 conversation history
+    save_soldier_memory(name, mem)
+    return mem
+
+
+def get_soldier_identity_summary(name: str) -> str:
+    """One-line identity summary for LLM prompts."""
+    mem = ensure_soldier_identity(name)
+    i = mem.get("identity", {})
+    return (
+        f"{i.get('rank', 'PVT')} {name} — {i.get('role', 'Rifleman')}, "
+        f"{i.get('age', 25)} yrs, from {i.get('origin', '?')}, "
+        f"{i.get('deployments', 1)} deployment(s), {i.get('time_in_theater_months', 6)} months in theater"
+    )
+
+
+def get_soldier_backstory(name: str) -> str:
+    """The soldier's generated personal backstory."""
+    mem = ensure_soldier_identity(name)
+    return mem.get("backstory", "No backstory recorded.")
+
+
+def log_soldier_thought(name: str, thought: str, mood: str):
+    """F8.1: Append a soldier's own thought to their conversation history."""
+    mem = load_soldier_memory(name)
+    mem["last_thought"] = thought
+    mem["mood"] = mood or mem.get("mood", "neutral")
+    hist = mem.get("thought_history", [])
+    hist.append({"time": datetime.now().isoformat(), "thought": thought})
+    mem["thought_history"] = hist[-10:]  # rolling window of 10
+    save_soldier_memory(name, mem)
+
+
+def get_soldier_thought_history(name: str, max_items: int = 3) -> str:
+    """F8.1: The soldier's own recent thoughts (conversation memory)."""
+    mem = ensure_soldier_identity(name)
+    hist = mem.get("thought_history", [])[-max_items:]
+    if not hist:
+        return "No prior thoughts on record."
+    return "\n".join(f"- earlier: {h.get('thought', '')}" for h in hist)
 
 
 app_state = {
@@ -389,6 +496,39 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
         lines.append(f"Environment: {sitrep.environment}")
 
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
+
+# ─── Robust JSON extraction ──────────────────────────────────────────
+# The Ollama proxy sometimes prepends prose or wraps JSON in ```json fences.
+# json.loads() on raw content fails then. Extract the first {...} block instead.
+
+def extract_json_block(content: str):
+    """Extract a JSON object from LLM output that may contain prose/fences.
+    Returns parsed dict, or None if no valid JSON object found."""
+    if not content:
+        return None
+    # Strip markdown code fences
+    text = content.strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        if len(parts) >= 3:
+            text = parts[1].strip()
+        else:
+            text = text.lstrip("`").strip()
+    # Find first { ... last } and try parsing that span
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        candidate = text[start:end + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+    # Last resort: try the raw text as JSON
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
 
 def _sitrep_fingerprint(sitrep: SitRepRequest) -> str:
     """Compute a fingerprint of the tactical situation. If this matches the last one, skip LLM call."""
@@ -599,15 +739,68 @@ def generate_ai_thoughts(event: str = ""):
     elif event == "leader_recovered":
         event_context = "\nEVENT: The squad leader is back up. Relief, determination, ready to continue.\n"
     
-    # Build member descriptions WITH personal memory
+    # Build member descriptions WITH identity + personal memory + conversation history
     member_lines = []
     for m in sitrep.squad:
         p = app_state["ai_personalities"].get(m.name, "STEADY")
+        identity = get_soldier_identity_summary(m.name)
+        backstory = get_soldier_backstory(m.name)
         history = get_soldier_history_summary(m.name, max_events=5)
-        member_lines.append(f"- {m.name} ({p}):\n{history}\n  Current: order={m.order}, sitrep={m.sitrep}")
+        own_thoughts = get_soldier_thought_history(m.name)
+        member_lines.append(
+            f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
+            f"  Own recent thoughts:\n{own_thoughts}\n"
+            f"  Current: order={m.order}, sitrep={m.sitrep}"
+        )
     
     members_text = "\n".join(member_lines)
-    prompt = f"Situation:\n{situation}\n{event_context}\nSquad members (with personal history):\n{members_text}\n\nGenerate one thought per member reacting to the situation. The thought should reflect their personality AND their personal experiences. A veteran who has survived 5 battles sounds different from a rookie on their first day."
+    prompt = (
+        f"Situation:\n{situation}\n{event_context}\n"
+        f"Squad members (with identity, backstory and personal history):\n{members_text}\n\n"
+        "Generate one thought per member reacting to the situation. The thought should reflect "
+        "their rank, role, backstory AND their personal experiences. A veteran who has survived "
+        "5 battles sounds different from a rookie on their first day. A medic thinks about wounds, "
+        "a grenadier about angles. Stay in character."
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=CONFIG["llm"]["model"],
+            messages=[
+                {"role": "system", "content": AI_THOUGHT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=350,
+            temperature=0.7
+        )
+        content = response.choices[0].message.content if response.choices else ""
+        data = extract_json_block(content)
+        if data:
+            thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
+            if not isinstance(thoughts, list):
+                thoughts = []
+            result = {"thoughts": thoughts}
+            app_state["cached_thoughts"] = result
+            app_state["llm_calls"] += 1
+            # F8.1: Store each soldier's thought in their personal conversation history
+            for t in thoughts:
+                tname = t.get("name", "?")
+                tthought = t.get("thought", "")
+                tmood = t.get("mood", "neutral")
+                log_soldier_thought(tname, tthought, tmood)
+            logger.info(f"AI thoughts generated: {len(thoughts)} thoughts for {len(sitrep.squad)} members")
+            for t in thoughts:
+                name = t.get("name", "?")
+                thought = t.get("thought", "")[:80]
+                mood = t.get("mood", "?")
+                logger.info(f"  [{name} ({mood})] {thought}")
+            return result
+    except Exception as e:
+        logger.error(f"AI thought generation failed: {e}")
+        app_state["errors"] += 1
+
+    return {"thoughts": []}
 @app.get("/health")
 async def health_check():
     uptime = time.time() - app_state["health_check_time"]
@@ -925,11 +1118,15 @@ async def get_soldier_memories():
                 "name": mem.get("name", filepath.stem),
                 "status": mem.get("status", "unknown"),
                 "personality": mem.get("personality", "?"),
+                "rank": (mem.get("identity") or {}).get("rank", "?"),
+                "role": (mem.get("identity") or {}).get("role", "?"),
+                "backstory": (mem.get("backstory", "") or "")[:100],
                 "events": len(mem.get("events", [])),
                 "battles": mem.get("battles_survived", 0),
                 "kills": mem.get("kills", 0),
                 "mood": mem.get("mood", "?"),
                 "last_thought": (mem.get("last_thought", "") or "")[:80],
+                "thought_history": len(mem.get("thought_history", [])),
                 "birth_date": mem.get("birth_date", "")[:10],
                 "death_date": (mem.get("death_date", "") or "")[:10],
             })
