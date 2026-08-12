@@ -611,6 +611,8 @@ app_state = {
     # F5: Battle Memory — rolling event log for LLM context
     "battle_log": [],                # last 15 events, included in LLM prompts
     "last_leader_state": "alive",
+    "last_enemy_count": -1,   # F8.5: previous SITREP enemy count (kill attribution)
+    "kill_rotation": 0,       # F8.5: round-robin kill attribution index
     "last_squad_names": [],  # Track squad member names for death detection
     "soldier_memory_enabled": True,    # F6: track leader state changes
 }
@@ -1156,6 +1158,27 @@ async def receive_sitrep(request: Request):
     elif leader_state == "alive" and app_state.get("last_leader_state") == "downed":
         add_battle_event("RECOVERY", "Squad leader is back on feet!")
     app_state["last_leader_state"] = leader_state
+
+    # F8.5: Kill attribution — if enemy count dropped since last SITREP,
+    # the squad took hostiles down. Assign the kill to a squad member
+    # (rotating, so the kill tally spreads across the squad over time).
+    prev_enemies = app_state.get("last_enemy_count", sitrep.enemy_count)
+    if prev_enemies > sitrep.enemy_count:
+        kills_this_cycle = prev_enemies - sitrep.enemy_count
+        members = [m.name for m in sitrep.squad]
+        if members:
+            for _ in range(kills_this_cycle):
+                idx = app_state.get("kill_rotation", 0) % len(members)
+                app_state["kill_rotation"] = idx + 1
+                killer = members[idx]
+                mem = load_soldier_memory(killer)
+                mem["kills"] = mem.get("kills", 0) + 1
+                save_soldier_memory(killer, mem)
+                log_soldier_event(killer, "kill", "Confirmed hostile eliminated")
+            add_battle_event("CONTACT", f"Squad eliminated {kills_this_cycle} hostile(s)")
+            logger.info(f"F8.5: {kills_this_cycle} kill(s) attributed (rotation at {app_state.get('kill_rotation', 0)})")
+    app_state["last_enemy_count"] = sitrep.enemy_count
+
     logger.info(f"LLM order: action={response.action}, offset={response.target_offset}, leader={leader_state}")
     return response
 
@@ -1376,6 +1399,13 @@ async def get_soldier_memories():
                 "thought_history": len(mem.get("thought_history", [])),
                 "birth_date": mem.get("birth_date", "")[:10],
                 "death_date": (mem.get("death_date", "") or "")[:10],
+                # F8.4: relationships + opinions for the dashboard roster
+                "relationships": {
+                    k: v.get("label", "unknown")
+                    for k, v in (mem.get("relationships") or {}).items()
+                    if v.get("label") and v["label"] != "unknown"
+                },
+                "opinions": [o.get("opinion", "") for o in (mem.get("opinions") or [])[-2:]],
             })
         except (json.JSONDecodeError, IOError):
             pass

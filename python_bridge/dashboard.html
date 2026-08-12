@@ -115,6 +115,12 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .r-status.alive{background:rgba(61,214,140,0.15);color:var(--success)}
 .r-status.dead{background:rgba(255,85,102,0.15);color:var(--danger)}
 .roster-item .r-kills{font-size:10px;color:var(--text-muted)}
+.roster-item .r-role{font-size:10px;color:var(--text-muted);margin-right:4px}
+.roster-item .r-mood{font-size:10px;color:#8be9fd;margin-right:4px}
+.roster-item .r-personality{font-size:10px;color:#bd93f9;margin-right:4px}
+.roster-item .r-rellist{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
+.roster-item .r-rel{font-size:9px;color:var(--text-secondary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:3px;padding:1px 5px}
+.roster-item .r-opinion{font-size:10px;color:#ffb86c;margin-top:3px;font-style:italic}
 
 /* ====== Footer ====== */
 .footer{grid-area:footer;background:var(--bg-secondary);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:16px;font-size:11px;color:var(--text-muted)}
@@ -600,11 +606,25 @@ async function pollSoldiers(){
       const kills = s.kills || 0;
       const battles = s.battles || 0;
       const mood = s.mood || '';
+      const rank = s.rank || '';
+      const role = s.role || '';
+      const personality = s.personality || '';
+      // F8.4: relationships badges (e.g. Alpha_2:trusted)
+      const rels = s.relationships || {};
+      const relBadges = Object.entries(rels).map(([k,v]) =>
+        '<span class="r-rel" title="'+escapeHtml(k)+'">'+escapeHtml(k.split('_')[0])+':'+escapeHtml(v)+'</span>'
+      ).join('');
+      const opinion = (s.opinions && s.opinions[0]) ? '<div class="r-opinion">💬 '+escapeHtml(s.opinions[0])+'</div>' : '';
       return '<div class="roster-item">' +
-        '<span class="r-name">'+escapeHtml(s.name)+'</span>' +
+        '<span class="r-name">'+escapeHtml((rank? rank+' ':'')+s.name)+'</span>' +
+        '<span class="r-role">'+escapeHtml(role)+'</span>' +
         '<span class="r-status '+status+'">'+status+'</span>' +
+        (mood ? '<span class="r-mood">'+escapeHtml(mood)+'</span>' : '') +
+        (personality ? '<span class="r-personality">'+escapeHtml(personality)+'</span>' : '') +
         (kills > 0 ? '<span class="r-kills">💀'+kills+'</span>' : '') +
         (battles > 0 ? '<span class="r-kills">⚔️'+battles+'</span>' : '') +
+        (relBadges ? '<div class="r-rellist">'+relBadges+'</div>' : '') +
+        opinion +
       '</div>';
     }).join('');
   } catch(e){
