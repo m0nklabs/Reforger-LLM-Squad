@@ -410,6 +410,15 @@ TOOL_ORDER_MAP = {
 }
 
 
+def _soldier_voice_index(name: str) -> int:
+    """F8.9: Map a soldier name (Alpha_1..Alpha_5) to a TTS voice index."""
+    try:
+        idx = int(name.split("_")[-1]) - 1
+        return max(0, idx % 5)
+    except (ValueError, IndexError):
+        return 0
+
+
 def handle_soldier_tool(name: str, tool: dict) -> str:
     """Process one soldier tool call. Returns a human-readable result string."""
     tool_name = (tool.get("name") or "").strip()
@@ -425,6 +434,8 @@ def handle_soldier_tool(name: str, tool: dict) -> str:
         count = args.get("count", 1)
         add_battle_event("CONTACT", f"{name} reports {count} hostile(s) {distance}m {direction}")
         result += f" -> {count} hostiles {distance}m {direction} logged"
+        # F8.9: Speak the contact report with the soldier's voice
+        tts_handler.speak(f"Contact! {count} hostiles, {distance} meters, {direction}!", member_index=_soldier_voice_index(name))
         logger.info(f"[TOOL] {result}")
 
     elif tool_name == "report_clear":
@@ -450,6 +461,8 @@ def handle_soldier_tool(name: str, tool: dict) -> str:
         # Queue the medic order for the game (squad moves to downed soldier)
         app_state["pending_orders"].append({"cmd": "medic", "source": f"soldier:{name}"})
         result += f" -> MEDIC order queued for {target}"
+        # F8.9: Audible medic call with the soldier's voice
+        tts_handler.speak(f"Medic! {target} is down! Medic!", member_index=_soldier_voice_index(name))
         logger.info(f"[TOOL] {result}")
 
     elif tool_name == "suggest_tactic":
