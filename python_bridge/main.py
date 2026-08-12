@@ -20,6 +20,7 @@ from typing import Optional, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from openai import OpenAI
 
@@ -2194,7 +2195,22 @@ async def receive_status_get(request: Request):
     if request.query_params.get("data"):
         return await _process_status(request)
     last_sitrep = app_state["last_sitrep"].model_dump() if app_state["last_sitrep"] else None
-    return {"state": {k: v for k, v in app_state.items() if k != "last_sitrep"}, "last_sitrep": last_sitrep}
+    # C.2 regression (fixed): the raw app_state dump contained chatter_task
+    # (an asyncio.Task), which jsonable_encoder cannot serialize -> /status
+    # returned 500 and the dashboard's battle log / thoughts / tactical map
+    # all silently died (pollStatus swallows fetch errors). Build a JSON-safe
+    # view instead: drop the known non-serializable handle AND any value that
+    # still fails encoding (future-proof against new handles in app_state).
+    state = {}
+    for k, v in app_state.items():
+        if k == "chatter_task":
+            continue
+        try:
+            jsonable_encoder(v)
+            state[k] = v
+        except Exception:
+            continue  # non-JSON value must not 500 /status
+    return {"state": state, "last_sitrep": last_sitrep}
 
 @app.post("/status")
 async def receive_status_post(request: Request):
@@ -2492,12 +2508,14 @@ async def get_soldier_memories(detail: int = 0):
                 "birth_date": mem.get("birth_date", "")[:10],
                 "death_date": (mem.get("death_date", "") or "")[:10],
                 # F8.4: relationships + opinions for the dashboard roster
+                # drift guard: old memory files may store bare-string
+                # relationship entries (same guard as get_social_summary)
                 "relationships": {
                     k: v.get("label", "unknown")
                     for k, v in (mem.get("relationships") or {}).items()
-                    if v.get("label") and v["label"] != "unknown"
+                    if isinstance(v, dict) and v.get("label") and v["label"] != "unknown"
                 },
-                "opinions": [o.get("opinion", "") for o in (mem.get("opinions") or [])[-2:]],
+                "opinions": [o.get("opinion", "") for o in (mem.get("opinions") or [])[-2:] if isinstance(o, dict)],
             }
             # F8.10: Full detail mode for the dashboard soldier panel
             if detail:
