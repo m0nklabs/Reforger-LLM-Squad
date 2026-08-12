@@ -1412,6 +1412,33 @@ async def startup_event():
     cleanup_dead_soldiers()
     print(f"[F7] Soldier memory system initialized: {SOLDIER_MEMORY_DIR}")
 
+    # Phase 2 fix: wire up + start the voice pipeline (was configured but
+    # never started — on_transcription stayed None, start() never called).
+    def _on_voice_transcription(text: str):
+        """PTT release → transcription → LLM order → queue for the game."""
+        text = text.strip()
+        if not text:
+            return
+        logger.info(f"[VOICE] Transcription: {text}")
+        try:
+            situation = get_situation_text(app_state["last_sitrep"]) if app_state.get("last_sitrep") else "No SITREP data."
+            response = call_llm(command=text, situation=situation)
+            order = {"cmd": response.action.lower(), "source": "voice", "voice_text": text}
+            if response.target_offset and len(response.target_offset) == 2:
+                order["offset"] = response.target_offset
+            app_state["pending_orders"].append(order)
+            logger.info(f"[VOICE] Order queued: {order}")
+            if response.voice_reply:
+                tts_handler.speak(response.voice_reply, member_index=0)
+        except Exception as e:
+            logger.error(f"[VOICE] Order processing failed: {e}")
+            app_state["errors"] += 1
+
+    voice_handler._on_transcription = _on_voice_transcription
+    if voice_handler.enabled:
+        started = voice_handler.start()
+        logger.info(f"Voice handler start result: {started}")
+
 
 
 

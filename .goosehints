@@ -100,6 +100,8 @@ Never invent these — every single one has already gone wrong once:
 39. **Ollama max_tokens truncation**: With `response_format=json_object` the proxy may hit `finish: length` and return TRUNCATED JSON (no closing `}`). `json.loads()` then fails. Raise max_tokens generously (600+) when output contains tool calls, and use `_repair_truncated_json()` to salvage member objects.
 40. **LLM output schema drift**: llama3.2-3b does NOT reliably return `{"thoughts": [...]}` — sometimes a bare member object, sometimes prose + fences, sometimes truncated. `extract_json_block()` must handle: prose prefix, ```json fences, wrapper dict, bare objects (collect as thoughts), truncated spans (per-object repair).
 41. **Windows console cp1252**: `logging` to console crashes on unicode chars (→, em-dash) in log strings under cp1252. Use ASCII (`->`) in log/result strings that may hit the console.
+42. **Voice pipeline never started (FIXED)**: `voice_handler.start()` was NEVER called and `on_transcription` stayed `None` — the config said enabled:true but nothing ran (`running:false` in /voice). Fixed in `startup_event()`: wire the transcription callback (text → `call_llm` → `pending_orders` + TTS reply) and call `start()`. ALSO: `keyboard`, `faster-whisper`, `pyttsx3`, `edge-tts` were missing from the venv — `pip install` them. STT verified end-to-end: pyttsx3-generated WAV → Whisper tiny → exact transcription.
+43. **STT is NOT in-game radio**: The voice pipeline listens on a GLOBAL PTT key (F24 default) capturing the microphone via `sounddevice` — it does NOT hook into Reforger's in-game radio/VOIP. It works while the game is running, but it's a separate button. In-game radio integration would need mod-side changes (game streams radio audio to the bridge).
 36. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
 37. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
 
@@ -117,7 +119,7 @@ Never invent these — every single one has already gone wrong once:
 - **F2.x**: Live orders (spawn/hold/move/despawn/formation/follow), manual AI spawn pattern, AIFormationComponent
 - **DS with mod working**: `game.mods[]` + BI Workshop, scripts compile + execute on DS
 - **F3.1/F3.2/F3.3**: Stavka OPFOR Strategic AI (now disabled — vanilla has OPFOR)
-- **Phase 2**: Voice pipeline (Whisper STT, PTT key, transcription → LLM → orders)
+- **Phase 2**: Voice pipeline (Whisper STT, PTT key, transcription → LLM → orders) — REPAIRED: was never started (start() never called, callback None); now wired in startup_event, dependencies installed, STT verified end-to-end
 - **F3.5**: Environment scanning (time/day/night, terrain elevation)
 - **Phase 3**: TTS squad feedback (edge-tts + pyttsx3 fallback)
 - **F4**: Vehicle mount/dismount commands + Stavka offset fix
