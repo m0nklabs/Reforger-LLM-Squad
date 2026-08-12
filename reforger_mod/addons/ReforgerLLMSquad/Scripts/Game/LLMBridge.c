@@ -261,6 +261,20 @@ class LLMBridge
 			else if (m_iLastSquadCount > m_iCurrentSquadCount)
 				thoughtEvent = "casualty";
 
+			// F6/F8: Event: leader state changed (downed/recovered)
+			if (thoughtEvent.IsEmpty())
+			{
+				string sLeaderNow = GetPlayerLifeState();
+				if (sLeaderNow != m_sLastLeaderState)
+				{
+					if (sLeaderNow == "downed")
+						thoughtEvent = "leader_downed";
+					else if (sLeaderNow == "alive" && m_sLastLeaderState == "downed")
+						thoughtEvent = "leader_recovered";
+					m_sLastLeaderState = sLeaderNow;
+				}
+			}
+
 			if (thoughtEvent != "" && m_fThoughtCooldown >= 15.0)
 			{
 				m_fThoughtCooldown = 0;
@@ -897,6 +911,28 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
+	// F8.3: Parse optional "tool" field from a thought JSON object.
+	// Returns empty string if no tool. Tool block: {"name": "call_medic", "args": {...}}
+	string ExtractThoughtTool(string sData, int scanFrom, out int scanEnd)
+	{
+		scanEnd = scanFrom;
+		int toolIdx = sData.IndexOfFrom(scanFrom, "\"tool\"");
+		if (toolIdx < 0) return "";
+
+		// Find tool name (first string value after "tool")
+		int nameIdx = sData.IndexOfFrom(toolIdx, "\"name\"");
+		if (nameIdx < 0) return "";
+		int colon = sData.IndexOfFrom(nameIdx, ":");
+		if (colon < 0) return "";
+		int start = sData.IndexOfFrom(colon, "\"");
+		if (start < 0) return "";
+		int end = sData.IndexOfFrom(start + 1, "\"");
+		if (end < 0) return "";
+		scanEnd = end + 1;
+		return sData.Substring(start + 1, end - start - 1);
+	}
+
+	//------------------------------------------------------------------------------------------------
 	void ProcessThoughts(string sData)
 	{
 		if (!sData || sData.IsEmpty()) return;
@@ -934,8 +970,20 @@ class LLMBridge
 
 			string thought = sData.Substring(thoughtStart + 1, thoughtEnd - thoughtStart - 1);
 
+			// F8.3: Check for optional tool call after this thought
+			int toolEnd = 0;
+			string toolName = ExtractThoughtTool(sData, thoughtEnd, toolEnd);
+			if (toolEnd > 0) scanPos = toolEnd; else scanPos = thoughtEnd + 1;
+
 			// Display via chat
 			string chatMsg = "[" + name + "] " + thought;
+
+			// F8.3: Append tool call to the message so agent actions are visible in-game
+			if (!toolName.IsEmpty())
+			{
+				chatMsg = chatMsg + " (" + toolName + ")";
+				Print("[LLMBridge] AI tool call: " + name + " -> " + toolName);
+			}
 
 			// Try chat display (may work on client, may not on DS)
 			SCR_ChatComponent.RadioProtocolMessage(chatMsg);
@@ -944,7 +992,6 @@ class LLMBridge
 			Print("[LLMBridge] AI thought: " + chatMsg);
 
 			thoughtCount++;
-			scanPos = thoughtEnd + 1;
 		}
 
 		if (thoughtCount > 0)
