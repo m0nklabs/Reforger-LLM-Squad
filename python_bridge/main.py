@@ -191,6 +191,7 @@ SOLDIER_MEMORY_DIR = _BRIDGE_DIR / "ai_soldiers"
 SOLDIER_GRAVEYARD_DIR = _BRIDGE_DIR / "ai_soldiers" / "graveyard"
 SOLDIER_RETENTION_DAYS = 7  # Keep dead soldier files for 7 days
 REPORTS_DIR = _BRIDGE_DIR / "reports"  # B.5: after-action reports
+ORDERS_BACKLOG_FILE = _BRIDGE_DIR / "pending_orders.json"  # D.3: orders survive bridge restarts
 
 def ensure_soldier_dirs():
     """Create soldier memory directories if they don't exist."""
@@ -906,6 +907,7 @@ def handle_soldier_tool(name: str, tool: dict) -> str:
         add_battle_event("CRITICAL", f"{name} calls MEDIC for {target}!")
         # Queue the medic order for the game (squad moves to downed soldier)
         app_state["pending_orders"].append({"cmd": "medic", "source": f"soldier:{name}"})
+        _persist_pending_orders()  # D.3
         result += f" -> MEDIC order queued for {target}"
         # F8.9: Audible medic call with the soldier's voice
         tts_handler.speak(f"Medic! {target} is down! Medic!", member_index=_soldier_voice_index(name))
@@ -1118,6 +1120,34 @@ app_state = {
     "pending_suggestions": [],
     "suggestion_counter": 0,
 }
+
+# ─── D.3: pending_orders backlog persistence ───────────────────────────
+
+def _persist_pending_orders():
+    """D.3: save the live orders queue to disk so it survives bridge restarts.
+    Called after every queue mutation (append / pop). The queue is tiny
+    (the game drains it every 2s), so writing the whole list is cheap."""
+    try:
+        with open(ORDERS_BACKLOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(app_state.get("pending_orders", []), f, indent=2)
+    except IOError as e:
+        logger.warning(f"[D.3] pending_orders persist failed: {e}")
+
+
+def _load_pending_orders():
+    """D.3: restore the orders queue persisted by a previous bridge process."""
+    try:
+        if ORDERS_BACKLOG_FILE.exists():
+            with open(ORDERS_BACKLOG_FILE, "r", encoding="utf-8") as f:
+                backlog = json.load(f)
+            if isinstance(backlog, list):
+                restored = [o for o in backlog if isinstance(o, dict)]
+                app_state["pending_orders"] = restored
+                if restored:
+                    logger.info(f"[D.3] Restored {len(restored)} pending order(s) from backlog")
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning(f"[D.3] backlog load failed: {e}")
+
 
 def _record_error(source: str, exc: BaseException):
     """E.3: count a bridge error AND keep a rolling trace (last 10) of
@@ -1974,6 +2004,7 @@ async def tts_status():
 async def get_orders():
     if app_state["pending_orders"]:
         order = app_state["pending_orders"].pop(0)
+        _persist_pending_orders()  # D.3: keep backlog on disk in sync
         logger.info(f"Order delivered to game: {order}")
         return order
     return {"cmd": None}
@@ -1983,6 +2014,7 @@ async def post_orders(request: Request):
     data = await _get_data(request)
     if data:
         app_state["pending_orders"].append(data)
+        _persist_pending_orders()  # D.3
         logger.info(f"Order queued: {data}")
         return {"status": "ok", "queued": len(app_state["pending_orders"])}
     return {"status": "error", "msg": "no data"}
@@ -2285,6 +2317,7 @@ def _approve_suggestion(s: dict):
         "formation": s.get("formation", "Line"),
         "source": f"soldier:{s.get('soldier')} (CO approved)",
     })
+    _persist_pending_orders()  # D.3
     add_battle_event("ORDER", f"CO approved {s.get('soldier')}'s suggestion: {s.get('formation')} formation")
     logger.info(f"[C.5] Suggestion #{s.get('id')} APPROVED by CO -> formation order queued")
 
@@ -2374,6 +2407,7 @@ async def startup_event():
             if response.target_offset and len(response.target_offset) == 2:
                 order["offset"] = response.target_offset
             app_state["pending_orders"].append(order)
+            _persist_pending_orders()  # D.3
             logger.info(f"[VOICE] Order queued: {order}")
             if response.voice_reply:
                 tts_handler.speak(response.voice_reply, member_index=0)
@@ -2388,6 +2422,10 @@ async def startup_event():
     # Phase 3 fix: TTS was configured but never started (start() never called,
     # so speak() short-circuited on _running=False and ALL squad audio was silent).
     tts_handler.start()
+
+    # D.3: restore orders queued before a bridge restart (the game drains
+    # /orders every 2s, so a restart mid-queue would silently drop orders).
+    _load_pending_orders()
 
     # C.2: start the radio chatter loop (background ambience TTS)
     app_state["chatter_next_at"] = time.time() + 30.0

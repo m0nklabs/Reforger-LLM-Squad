@@ -779,6 +779,35 @@ def test_suggestion_approval_flow():
     bridge.app_state["pending_orders"] = []
 
 
+def test_pending_orders_backlog_persistence():
+    print("test_pending_orders_backlog_persistence")
+    bridge.ORDERS_BACKLOG_FILE.unlink(missing_ok=True)
+    # persist the queue
+    bridge.app_state["pending_orders"] = [
+        {"cmd": "move", "offset": [50, 0]},
+        {"cmd": "medic", "source": "soldier:X"},
+    ]
+    bridge._persist_pending_orders()
+    check("backlog file written", bridge.ORDERS_BACKLOG_FILE.exists())
+    # "bridge restarts": wipe app_state, then restore
+    bridge.app_state["pending_orders"] = []
+    bridge._load_pending_orders()
+    check("orders restored after restart", bridge.app_state["pending_orders"] == [
+        {"cmd": "move", "offset": [50, 0]},
+        {"cmd": "medic", "source": "soldier:X"},
+    ])
+    # corrupt backlog must be ignored gracefully
+    bridge.ORDERS_BACKLOG_FILE.write_text("not json{{{", encoding="utf-8")
+    bridge.app_state["pending_orders"] = []
+    bridge._load_pending_orders()
+    check("corrupt backlog ignored", bridge.app_state["pending_orders"] == [])
+    # non-list backlog ignored
+    bridge.ORDERS_BACKLOG_FILE.write_text('"just a string"', encoding="utf-8")
+    bridge._load_pending_orders()
+    check("non-list backlog ignored", bridge.app_state["pending_orders"] == [])
+    bridge.ORDERS_BACKLOG_FILE.unlink(missing_ok=True)
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -827,6 +856,8 @@ def run_tests():
     test_error_surfacing()
     print("=== C.5 suggestion approval flow unit tests ===")
     test_suggestion_approval_flow()
+    print("=== D.3 orders backlog persistence unit tests ===")
+    test_pending_orders_backlog_persistence()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()
