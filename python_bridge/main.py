@@ -541,7 +541,7 @@ def update_social_bonds(event: str, squad_names: list):
             entry["label"] = label
             rels[other] = entry
         mem["relationships"] = rels
-        # Materialize strong opinions (cap at 6 stored opinions, refresh text)
+        # Materialize/refresh opinions from current scores (keep latest 6)
         opinion_topics = {o.get("topic") for o in opinions}
         for other in squad_names:
             if other == name:
@@ -553,8 +553,20 @@ def update_social_bonds(event: str, squad_names: list):
                 if score >= threshold:
                     best = (lbl, template)
                     break  # first (strongest) matching label wins
-            if best and abs(score) >= 4 and other not in opinion_topics:
-                lbl, template = best
+            if not best or abs(score) < 4:
+                continue
+            lbl, template = best
+            # Update existing opinion if its strength label changed
+            updated = False
+            for o in opinions:
+                if o.get("topic") == other:
+                    if o.get("strength") != lbl:
+                        o["opinion"] = template.format(subject=other)
+                        o["strength"] = lbl
+                        o["score"] = score
+                        updated = True
+                    break
+            if not updated and other not in opinion_topics:
                 opinions.append({
                     "topic": other,
                     "opinion": template.format(subject=other),
@@ -1424,7 +1436,23 @@ async def get_soldier_memories():
             })
         except (json.JSONDecodeError, IOError):
             pass
-    return {"soldiers": soldiers, "total": len(soldiers)}
+    # F8.8: Include archived KIA soldiers from the graveyard
+    graveyard = []
+    for filepath in SOLDIER_GRAVEYARD_DIR.glob("*.json"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            graveyard.append({
+                "name": mem.get("name", filepath.stem),
+                "rank": (mem.get("identity") or {}).get("rank", "?"),
+                "role": (mem.get("identity") or {}).get("role", "?"),
+                "kills": mem.get("kills", 0),
+                "battles": mem.get("battles_survived", 0),
+                "death_date": (mem.get("death_date", "") or "")[:10],
+            })
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"soldiers": soldiers, "total": len(soldiers), "graveyard": graveyard}
 
 if __name__ == "__main__":
     import uvicorn

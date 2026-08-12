@@ -627,6 +627,20 @@ async function pollSoldiers(){
         opinion +
       '</div>';
     }).join('');
+
+    // F8.8: Append graveyard (archived KIA) section if any
+    const graveyard = data.graveyard || [];
+    if(graveyard.length > 0){
+      el.innerHTML += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">' +
+        '<div class="r-opinion" style="color:var(--text-muted)">⚰️ KIA — '+graveyard.length+' archived</div>' +
+        graveyard.map(g => '<div class="roster-item" style="opacity:.6">' +
+          '<span class="r-name">'+escapeHtml((g.rank? g.rank+' ':'')+g.name)+'</span>' +
+          '<span class="r-role">'+escapeHtml(g.role)+'</span>' +
+          '<span class="r-status dead">KIA</span>' +
+          (g.kills > 0 ? '<span class="r-kills">💀'+g.kills+'</span>' : '') +
+          (g.battles > 0 ? '<span class="r-kills">⚔️'+g.battles+'</span>' : '') +
+        '</div>').join('') + '</div>';
+    }
   } catch(e){
     // silent
   }
