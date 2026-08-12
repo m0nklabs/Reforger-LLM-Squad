@@ -20,7 +20,7 @@ if %errorlevel% equ 0 (
     echo [OK] Python bridge is already running on port 5001
 ) else (
     echo [START] Starting Python bridge...
-    start "Reforger-LLM-Bridge" /min cmd /k "cd /d %~dp0\python_bridge && venv\Scripts\python.exe main.py"
+    start "Reforger-LLM-Bridge" /min cmd /c "cd /d %~dp0\python_bridge && venv\Scripts\python.exe main.py"
     timeout /t 3 /nobreak >nul
     echo [OK] Python bridge started.
 )
