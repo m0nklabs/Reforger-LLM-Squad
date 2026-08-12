@@ -186,11 +186,98 @@ _BRIDGE_DIR = Path(__file__).resolve().parent
 SOLDIER_MEMORY_DIR = _BRIDGE_DIR / "ai_soldiers"
 SOLDIER_GRAVEYARD_DIR = _BRIDGE_DIR / "ai_soldiers" / "graveyard"
 SOLDIER_RETENTION_DAYS = 7  # Keep dead soldier files for 7 days
+REPORTS_DIR = _BRIDGE_DIR / "reports"  # B.5: after-action reports
 
 def ensure_soldier_dirs():
     """Create soldier memory directories if they don't exist."""
     SOLDIER_MEMORY_DIR.mkdir(exist_ok=True)
     SOLDIER_GRAVEYARD_DIR.mkdir(exist_ok=True)
+    REPORTS_DIR.mkdir(exist_ok=True)
+
+
+# ─── B.5: After-action report ──────────────────────────────────────────
+# When a session ends (SITREP gap > SESSION_GAP_SECONDS), write a battle
+# report to reports/ and keep a one-line summary to feed into the NEXT
+# session's soldier prompts ("the squad remembers the previous deployment").
+
+def _write_after_action_report() -> str:
+    """B.5: snapshot the session that just ended into a battle report.
+
+    Reads all soldier memory files (alive + graveyard) + the battle log.
+    Writes reports/report_<ts>.json. Returns a compact summary line that is
+    stored in app_state and fed into the next session's prompts.
+    Only called from _check_session_boundary() when a session actually ran.
+    """
+    ensure_soldier_dirs()
+    soldiers = []
+    for filepath in sorted(SOLDIER_MEMORY_DIR.glob("*.json")):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            ident = mem.get("identity") or {}
+            soldiers.append({
+                "name": mem.get("name", filepath.stem),
+                "rank": ident.get("rank", "?"),
+                "role": ident.get("role", "?"),
+                "status": mem.get("status", "?"),
+                "kills": mem.get("kills", 0),
+                "battles": mem.get("battles_survived", 0),
+                "mood": mem.get("mood", "?"),
+                "last_thought": (mem.get("last_thought") or "")[:200],
+            })
+        except (json.JSONDecodeError, IOError):
+            pass
+    kia = []
+    for filepath in sorted(SOLDIER_GRAVEYARD_DIR.glob("*.json")):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            ident = mem.get("identity") or {}
+            kia.append({
+                "name": mem.get("name", filepath.stem),
+                "rank": ident.get("rank", "?"),
+                "kills": mem.get("kills", 0),
+                "battles": mem.get("battles_survived", 0),
+                "death_date": (mem.get("death_date") or "")[:16],
+            })
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    if not soldiers and not kia:
+        logger.info("[B.5] Session ended with no soldier memory - no report written")
+        return ""
+    started = app_state.get("session_start_time", app_state.get("health_check_time"))
+    duration_min = max(0, round((time.time() - started) / 60, 1))
+    report = {
+        "session_end": datetime.now().isoformat(),
+        "session_duration_minutes": duration_min,
+        "battle_log": app_state.get("battle_log", [])[-15:],
+        "soldiers": soldiers,
+        "kia": kia,
+    }
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = REPORTS_DIR / f"report_{ts}.json"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        logger.info(f"[B.5] After-action report written: {path}")
+    except IOError as e:
+        logger.warning(f"[B.5] report write failed: {e}")
+        return ""
+
+    # Compact summary line for the next session's prompts
+    total_kills = sum(s.get("kills", 0) for s in soldiers)
+    total_battles = sum(s.get("battles", 0) for s in soldiers)
+    returned = sum(1 for s in soldiers if s.get("status") == "alive")
+    lost = len(kia)
+    parts = [f"{len(soldiers)} soldiers deployed, {returned} returned, {lost} KIA"]
+    if kia:
+        parts.append("fell: " + ", ".join(f"{k['name']} ({k['kills']} kills)" for k in kia))
+    parts.append(f"squad totals: {total_kills} kills, {total_battles} battles")
+    summary = "; ".join(parts)
+    app_state["last_report_summary"] = summary
+    app_state["last_report_path"] = str(path)
+    return summary
 
 def load_soldier_memory(name: str) -> dict:
     """Load a soldier's personal memory file. Create if not exists."""
@@ -778,6 +865,9 @@ app_state = {
     "cached_stavka_orders": None,
     # Player activity tracking
     "last_sitrep_time": time.time(),  # updated on every SITREP; LLM skipped if stale > 90s
+    "session_start_time": time.time(),  # B.5: when the current session began
+    "last_report_summary": None,        # B.5: previous deployment recap for prompts
+    "last_report_path": None,           # B.5: most recent report file
     # F5: Battle Memory — rolling event log for LLM context
     "battle_log": [],                # last 15 events, included in LLM prompts
     "last_leader_state": "alive",
@@ -1369,6 +1459,7 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         chatter = get_squadmate_recent_thoughts(sitrep, m.name)  # A.2
         last_result = load_soldier_memory(m.name).get("last_tool_result")  # A.3
         legacy = load_soldier_memory(m.name).get("legacy")  # B.1
+        prev_deploy = app_state.get("last_report_summary")  # B.5
         member_lines.append(
             f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
             f"{social}\n"
@@ -1376,6 +1467,7 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
             + (f"  Squadmate chatter heard:\n{chatter}\n" if chatter else "")
             + (f"  Last action result: {last_result}\n" if last_result else "")
             + (f"  Legacy: {legacy}\n" if legacy else "")
+            + (f"  Previous deployment: {prev_deploy}\n" if prev_deploy else "")
             + f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
 
@@ -1463,6 +1555,10 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
         if legacy:
             # B.1: replacement soldier - carries the predecessor's memory
             system_content += f"\n\nLegacy: {legacy}"
+        prev_deploy = app_state.get("last_report_summary")
+        if prev_deploy:
+            # B.5: the squad remembers the previous deployment
+            system_content += f"\n\nPrevious deployment (what the squad remembers): {prev_deploy}"
 
         # Own conversation history (last 6 exchanges = 12 messages) as real chat turns
         conv = [c for c in mem.get("conversation", []) if isinstance(c, dict) and c.get("role")]
@@ -1593,10 +1689,16 @@ def _check_session_boundary(now: float = None) -> bool:
     the new session's squad must be treated as a fresh one - members of the
     previous session must NOT be marked dead just because they are absent.
     Without this, a reconnect with a different squad composition would
-    false-KIA everyone who didn't come back."""
+    false-KIA everyone who didn't come back.
+
+    B.5: when a session with soldiers actually ends, an after-action report
+    is written first (squad state is still intact at this point)."""
     now = now or time.time()
     prev = app_state.get("last_sitrep_time", now)
     if app_state["sitrep_count"] > 1 and (now - prev) > SESSION_GAP_SECONDS:
+        # A session with soldiers is ending - snapshot it before resetting
+        if app_state.get("last_squad_names"):
+            _write_after_action_report()
         app_state["last_squad_names"] = []
         app_state["missing_soldiers"] = {}
         logger.info("Session boundary detected (SITREP gap > 90s) - squad state reset")
@@ -1609,7 +1711,8 @@ async def receive_sitrep(request: Request):
     # B.1: if the previous SITREP is more than a session gap old, a new game
     # session started - forget the old session's squad (before updating the
     # timestamp so the gap is measurable).
-    _check_session_boundary()
+    if _check_session_boundary():
+        app_state["session_start_time"] = time.time()
     app_state["sitrep_count"] += 1
     app_state["last_sitrep_time"] = time.time()
     data = await _get_data(request)

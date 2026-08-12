@@ -569,6 +569,82 @@ def test_replacement_resets_rank_and_deeds():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_12.json").unlink(missing_ok=True)
 
 
+def test_after_action_report_written_on_session_end():
+    print("test_after_action_report_written_on_session_end")
+    import shutil
+    for f in bridge.REPORTS_DIR.glob("report_*.json"):
+        f.unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_15.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_16.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_16.json").unlink(missing_ok=True)
+    # two soldiers with stats; Kilo_16 KIA (file + graveyard copy)
+    m = bridge.load_soldier_memory("Kilo_15")
+    bridge.ensure_soldier_identity("Kilo_15")
+    m = bridge.load_soldier_memory("Kilo_15")
+    m["kills"] = 5
+    m["battles_survived"] = 2
+    bridge.save_soldier_memory("Kilo_15", m)
+    m = bridge.load_soldier_memory("Kilo_16")
+    bridge.ensure_soldier_identity("Kilo_16")
+    m = bridge.load_soldier_memory("Kilo_16")
+    m["kills"] = 1
+    m["status"] = "dead"
+    m["death_date"] = "2026-08-13T00:00:00"
+    bridge.save_soldier_memory("Kilo_16", m)
+    shutil.copy(bridge.SOLDIER_MEMORY_DIR / "Kilo_16.json", bridge.SOLDIER_GRAVEYARD_DIR / "Kilo_16.json")
+    # simulate session end (gap > 90s)
+    bridge.app_state["sitrep_count"] = 5
+    bridge.app_state["last_sitrep_time"] = time.time() - 200
+    bridge.app_state["last_squad_names"] = ["Kilo_15", "Kilo_16"]
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["battle_log"] = ["[00:01:00] CONTACT: 3 hostiles detected"]
+    bridge.app_state["session_start_time"] = time.time() - 3600
+    check("boundary detected", bridge._check_session_boundary() is True)
+    check("squad state reset", bridge.app_state["last_squad_names"] == [])
+    summary = bridge.app_state.get("last_report_summary") or ""
+    check("summary stored with KIA + stats", "1 KIA" in summary and "Kilo_16" in summary, summary)
+    report_files = list(bridge.REPORTS_DIR.glob("report_*.json"))
+    check("report file written", len(report_files) == 1, str(len(report_files)))
+    with open(report_files[0], encoding="utf-8") as f:
+        rep = json.load(f)
+    check("report has session duration", rep.get("session_duration_minutes", 0) >= 59, str(rep.get("session_duration_minutes")))
+    check("report has battle log", len(rep.get("battle_log", [])) == 1)
+    names = [s.get("name") for s in rep.get("soldiers", [])]
+    check("report lists soldiers", "Kilo_15" in names and "Kilo_16" in names)
+    check("report lists KIA", any(k.get("name") == "Kilo_16" for k in rep.get("kia", [])))
+    # second boundary call must NOT write a duplicate report (state already reset)
+    report_count = len(list(bridge.REPORTS_DIR.glob("report_*.json")))
+    bridge._check_session_boundary()
+    check("no duplicate report", len(list(bridge.REPORTS_DIR.glob("report_*.json"))) == report_count)
+    # cleanup
+    for f in bridge.REPORTS_DIR.glob("report_*.json"):
+        f.unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_15.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_16.json").unlink(missing_ok=True)
+    bridge.SOLDIER_GRAVEYARD_DIR.joinpath("Kilo_16.json").unlink(missing_ok=True)
+    bridge.app_state["last_report_summary"] = None
+    bridge.app_state["last_squad_names"] = []
+    bridge.app_state["missing_soldiers"] = {}
+
+
+def test_report_summary_in_prompts():
+    print("test_report_summary_in_prompts")
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_17.json").unlink(missing_ok=True)
+    bridge.app_state["last_report_summary"] = "3 soldiers deployed, 2 returned, 1 KIA; squad totals: 7 kills, 3 battles"
+    fake = FakeClient(['{"thought": "We remember the last deployment.", "mood": "calm"}'])
+    bridge.client = fake
+    bridge._generate_thoughts_per_soldier(make_sitrep(["Kilo_17"]), "Situation:\nquiet.", "")
+    sys_prompt = fake.calls[0][0]["content"]
+    check("summary in per-soldier system prompt", "Previous deployment" in sys_prompt and "1 KIA" in sys_prompt)
+    fake2 = FakeClient(['{"thought": "Remembering...", "mood": "calm"}'])
+    bridge.client = fake2
+    bridge._generate_thoughts_batched(make_sitrep(["Kilo_17"]), "Situation:\nquiet.", "")
+    batched = fake2.calls[0][1]["content"] if len(fake2.calls) > 0 else ""
+    check("summary in batched member lines", "Previous deployment" in batched and "7 kills" in batched)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_17.json").unlink(missing_ok=True)
+    bridge.app_state["last_report_summary"] = None
+
+
 def test_session_boundary_resets_squad_state():
     print("test_session_boundary_resets_squad_state")
     # SITREP gap > 90s = player disconnected, new session. The old session's
@@ -589,6 +665,11 @@ def test_session_boundary_resets_squad_state():
     check("state kept within session", bridge.app_state["last_squad_names"] == ["Old_1"])
     bridge.app_state["last_squad_names"] = []
     bridge.app_state["missing_soldiers"] = {}
+    # B.5: the boundary call above also fires the after-action report path -
+    # clean up any report it may have written (test isolation)
+    for f in bridge.REPORTS_DIR.glob("report_*.json"):
+        f.unlink(missing_ok=True)
+    bridge.app_state["last_report_summary"] = None
 
 
 def test_replacement_resurrection_and_legacy():
@@ -660,6 +741,9 @@ def run_tests():
     test_multi_rank_promotion()
     test_no_promotion_below_threshold()
     test_replacement_resets_rank_and_deeds()
+    print("=== B.5 after-action report unit tests ===")
+    test_after_action_report_written_on_session_end()
+    test_report_summary_in_prompts()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()
