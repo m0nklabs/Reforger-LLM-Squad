@@ -19,7 +19,8 @@
       "CHARLIE"
     ],
     "fallback_action": "HOLD",
-    "death_grace_cycles": 2
+    "death_grace_cycles": 2,
+    "session_gap_seconds": 90
   },
   "fatigue": {
     "enabled": true,
@@ -52,5 +53,12 @@
     "max_interval_seconds": 150,
     "quiet_seconds": 30,
     "max_per_session": 12
+  },
+  "memory": {
+    "soldier_retention_days": 7,
+    "event_window": 50,
+    "thought_window": 10,
+    "conversation_exchanges": 10,
+    "battle_log_size": 15
   }
 }

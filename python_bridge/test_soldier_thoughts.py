@@ -808,6 +808,23 @@ def test_pending_orders_backlog_persistence():
     bridge.ORDERS_BACKLOG_FILE.unlink(missing_ok=True)
 
 
+def test_config_driven_windows():
+    print("test_config_driven_windows")
+    # E.2: the rolling windows must respect the (monkeypatched) config values
+    old_size, old_events = bridge.BATTLE_LOG_SIZE, bridge.app_state["battle_log"]
+    bridge.BATTLE_LOG_SIZE = 3
+    bridge.app_state["battle_log"] = []
+    for i in range(5):
+        bridge.add_battle_event("ORDER", f"event {i}")
+    check("battle log capped by config", len(bridge.app_state["battle_log"]) == 3)
+    check("oldest dropped first", all("event 0" not in e and "event 1" not in e for e in bridge.app_state["battle_log"]))
+    bridge.BATTLE_LOG_SIZE, bridge.app_state["battle_log"] = old_size, old_events
+    # config defaults are sane (read from config.json at import)
+    check("config constants loaded", bridge.SESSION_GAP_SECONDS == 90 and bridge.SOLDIER_RETENTION_DAYS == 7
+          and bridge.EVENT_WINDOW == 50 and bridge.THOUGHT_WINDOW == 10
+          and bridge.CONVERSATION_EXCHANGES == 10 and bridge.BATTLE_LOG_SIZE == 15)
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -858,6 +875,8 @@ def run_tests():
     test_suggestion_approval_flow()
     print("=== D.3 orders backlog persistence unit tests ===")
     test_pending_orders_backlog_persistence()
+    print("=== E.2 config-driven tuning unit tests ===")
+    test_config_driven_windows()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()

@@ -189,7 +189,15 @@ Remember events from RECENT BATTLE EVENTS when making decisions — this is your
 _BRIDGE_DIR = Path(__file__).resolve().parent
 SOLDIER_MEMORY_DIR = _BRIDGE_DIR / "ai_soldiers"
 SOLDIER_GRAVEYARD_DIR = _BRIDGE_DIR / "ai_soldiers" / "graveyard"
-SOLDIER_RETENTION_DAYS = 7  # Keep dead soldier files for 7 days
+# ─── E.2: config-driven tuning ────────────────────────────────────────
+# Bridge-side magic numbers live in config.json (memory + game blocks) so
+# they can be tuned without touching code. Game-side numbers (thought
+# cooldowns, health thresholds) live in the .c files and are NOT here.
+SOLDIER_RETENTION_DAYS = int(CONFIG.get("memory", {}).get("soldier_retention_days", 7))
+EVENT_WINDOW = int(CONFIG.get("memory", {}).get("event_window", 50))
+THOUGHT_WINDOW = int(CONFIG.get("memory", {}).get("thought_window", 10))
+CONVERSATION_EXCHANGES = int(CONFIG.get("memory", {}).get("conversation_exchanges", 10))
+BATTLE_LOG_SIZE = int(CONFIG.get("memory", {}).get("battle_log_size", 15))
 REPORTS_DIR = _BRIDGE_DIR / "reports"  # B.5: after-action reports
 ORDERS_BACKLOG_FILE = _BRIDGE_DIR / "pending_orders.json"  # D.3: orders survive bridge restarts
 
@@ -547,8 +555,8 @@ def log_soldier_event(name: str, event_type: str, description: str):
         "desc": description,
     })
     # Keep last 50 events per soldier (rolling window)
-    if len(mem["events"]) > 50:
-        mem["events"] = mem["events"][-50:]
+    if len(mem["events"]) > EVENT_WINDOW:
+        mem["events"] = mem["events"][-EVENT_WINDOW:]
     save_soldier_memory(name, mem)
 
 def mark_soldier_dead(name: str):
@@ -759,7 +767,7 @@ def log_soldier_thought(name: str, thought: str, mood: str):
     mem["mood"] = mood or mem.get("mood", "neutral")
     hist = mem.get("thought_history", [])
     hist.append({"time": datetime.now().isoformat(), "thought": thought})
-    mem["thought_history"] = hist[-10:]  # rolling window of 10
+    mem["thought_history"] = hist[-THOUGHT_WINDOW:]  # rolling window
     save_soldier_memory(name, mem)
 
 
@@ -776,11 +784,11 @@ def log_soldier_exchange(name: str, thought: str, mood: str, situation_brief: st
     mem["mood"] = mood or mem.get("mood", "neutral")
     hist = mem.get("thought_history", [])
     hist.append({"time": datetime.now().isoformat(), "thought": thought})
-    mem["thought_history"] = hist[-10:]  # rolling window of 10
+    mem["thought_history"] = hist[-THOUGHT_WINDOW:]  # rolling window
     conv = mem.get("conversation", [])
     conv.append({"role": "user", "content": situation_brief})
     conv.append({"role": "assistant", "content": thought, "mood": mem["mood"]})
-    mem["conversation"] = conv[-20:]  # last 10 exchanges
+    mem["conversation"] = conv[-CONVERSATION_EXCHANGES * 2:]  # last N exchanges
     save_soldier_memory(name, mem)
 
 
@@ -842,7 +850,7 @@ DEATH_GRACE_CYCLES = int(CONFIG.get("game", {}).get("death_grace_cycles", 2))
 # A SITREP gap longer than this means the player disconnected / a new session
 # started. Members of the OLD session must not be treated as dead just because
 # the new session's squad doesn't include them.
-SESSION_GAP_SECONDS = 90
+SESSION_GAP_SECONDS = int(CONFIG.get("game", {}).get("session_gap_seconds", 90))
 
 # ─── F8.3: Soldier Tools — agent actions that trigger game logic ───────
 # A soldier's thought JSON may include an optional "tool" block:
@@ -1172,7 +1180,7 @@ def add_battle_event(event_type: str, description: str):
     """F5: Add an event to the battle memory log."""
     event = f"[{time.strftime('%H:%M:%S')}] {event_type}: {description}"
     app_state["battle_log"].append(event)
-    while len(app_state["battle_log"]) > 15:
+    while len(app_state["battle_log"]) > BATTLE_LOG_SIZE:
         app_state["battle_log"].pop(0)
     logger.info(f"Battle log: {event}")
 
