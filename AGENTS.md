@@ -117,6 +117,9 @@ Never invent these — every single one has already gone wrong once:
 56. **check_latest_log.ps1 missed non-LLMBridge errors (FIXED)**: the `$ours` filter matched only `LLMBridge|ReforgerLLMSquad`, but error lines carry the file name (`@"scripts/Game/AutoSquadManager.c,772"`) — errors in AutoSquadManager/Stavka/AutoConnect were invisible unless "Can't compile" appeared. Now matches all our script files.
 57. **Stavka parser has the same IndexOfFrom(-1) pattern** (rules 46) in offset parsing — but it's DISABLED code (`PollStavka` early-returns). Re-enable with care: fix those guards first.
 58. **DS loads mod from LOCAL addons dir, not Workshop**: `server.json` has `"mods": []` but the mod works — the DS picks up `./addons/ReforgerLLMSquad/` (gproj GUID 7E5A1C9B3D8F2406 in log). `game.mods[]` is NOT required on this setup. The Workshop cache path matters for CLIENTS (and as the override source per rule 7).
+59. **extract_json_block dict-or-None contract (FIXED)**: llama3.2-3b sometimes returns a bare JSON string literal (`"Alpha_1: thought"`) or array — `json.loads` succeeds and returns a non-dict, and any caller doing `data.get(...)` crashes with `'str' object has no attribute 'get'` (this was killing 2-3 of 4 per-soldier calls per cycle). `extract_json_block` now returns `None` for non-dict results, and the per-soldier parser salvages `{"thoughts": [<string>]}` wrappers. Rule 40 family — ALWAYS enforce dict-or-None at the parser, never trust the caller to guard.
+60. **uv venv shim = two python.exe, ONE bridge**: `venv\Scripts\python.exe` created by `uv venv` is a launcher that spawns the real uv-managed python — `Get-CimInstance Win32_Process` shows TWO `python.exe main.py` entries (parent/child, same CreationDate). This is NOT the rule-38 two-bridge trap. Check `ParentProcessId` before assuming a duplicate.
+61. **A.2 chatter uses previous-cycle semantics**: squadmate chatter is read from memory FILES (last assistant message in each squadmate's `conversation`), so soldiers react to what squadmates said in the PREVIOUS generation cycle — generation stays parallel (no sequential coupling). First cycle = empty chatter, graceful. Chatter is persisted in the conversation brief (`| heard: ...`) so reactions stay in context.
 36. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
 37. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
 
@@ -154,6 +157,8 @@ Never invent these — every single one has already gone wrong once:
 - **F8.9**: Audible soldier tool calls via TTS with per-soldier voices
 - **F8.10**: Soldier detail panel in dashboard (backstory, event log, thought history)
 - **F8.11**: Voice/STT status panel in dashboard (PTT key, model state, last transcription)
+- **A.1 Per-soldier LLM conversations** (committed 560ba126): ONE private conversation per soldier — system prompt with own identity+backstory+personality+CoC+tools, own `conversation` log as real chat turns (last 6 exchanges), current situation as latest turn. One LLM call per soldier + batched fallback. Unit tests: `python_bridge/test_soldier_thoughts.py`.
+- **A.2 Soldier-to-soldier chatter** (committed this round): each soldier's prompt includes "Squadmate chatter" — the most recent transmission of each squadmate (read from their memory file, previous-cycle semantics, self excluded). System prompt tells soldiers to react/acknowledge/push back. Chatter also persisted in the conversation brief ("| heard: ...") so reactions stay in context. Batched fallback gets "Squadmate chatter heard" per member. Verified live: Alpha_1 reacting to Alpha_3's words across cycles, 0 errors.
 - **Bugfix rounds 1-3**: 20+ fixes — TTS/voice never started, event-shift bug, despawn/respawn/playerID, IndexOfFrom(-1) guards, JSON parse hardening, name sanitizer, PTT races, TTS loop race, check_latest_log.ps1 filter (see rules 42-58)
 - **Dynamic faction** (squad + OPFOR adapt to player faction)
 - **Faction fix** (FactionManager.GetPlayerFaction, not group components)
@@ -173,8 +178,6 @@ F8.1–F8.11 are done (see Completed). The list below is the forward path, order
 - **V.3 Battlefield sanity**: enemy contact → thought event "contact" fires within 15s (rule 45 fix), leader downed → leader_downed event + MEDIC order (rule 49 fix).
 
 #### Phase A — AGENT CORE (the real F8: per-soldier LLM agents)
-- **A.1 Per-soldier LLM messages array**: Replace the single shared thought-call with ONE conversation per soldier: `{"name", "role":"system", "content": identity+backstory+CoC}` + own `thought_history` + current situation. Generate per-soldier (4 calls) or batched. This is the missing piece of the F8 vision ("not just flat event log").
-- **A.2 Soldier-to-soldier chatter**: Soldiers react to EACH OTHER's thoughts (Alpha_3's nervousness gets a response from Alpha_2), not just to the situation. Requires A.1 (own history incl. squadmate thoughts).
 - **A.3 Tool consequence awareness**: After a tool call fires, the RESULT (order queued / battle_log entry) is fed back into the soldier's next prompt — soldiers learn their actions have effects.
 - **A.4 Game backstory integration (research)**: Check if Reforger character identity/lore is readable from script (CharacterIdentityComponent — see local API zip). If yes, feed into system prompt; if not, mark as permanently N/A.
 

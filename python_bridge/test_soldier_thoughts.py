@@ -164,6 +164,115 @@ def test_history_fed_back_as_chat_turns():
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_8.json").unlink(missing_ok=True)
 
 
+def test_per_soldier_string_in_wrapper():
+    print("test_per_soldier_string_in_wrapper")
+    fake = FakeClient(['{"thoughts": ["Alpha_1: plain text thought here"]}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Alpha_1"]), "Situation:\nno contacts.", "")
+    check("string entry salvaged as thought", out and out[0]["name"] == "Alpha_1" and out[0]["thought"] == "Alpha_1: plain text thought here")
+
+
+def test_batched_string_entries_dropped():
+    print("test_batched_string_entries_dropped")
+    fake = FakeClient(['{"thoughts": ["not an object", {"name": "Alpha_1", "thought": "Real thought", "mood": "calm"}]}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_batched(make_sitrep(["Alpha_1"]), "Situation:\nno contacts.", "")
+    check("string entries dropped, dicts kept", len(out) == 1 and out[0]["thought"] == "Real thought")
+
+
+def test_per_soldier_bare_json_string():
+    print("test_per_soldier_bare_json_string")
+    # LLM sometimes returns a bare quoted string instead of an object:
+    #   "Alpha_1: moving to the treeline"
+    # extract_json_block must return None (not the str), and the per-soldier
+    # path must skip gracefully instead of crashing on data.get().
+    fake = FakeClient(['"Alpha_1: moving to the treeline"'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Alpha_1"]), "Situation:\nno contacts.", "")
+    check("bare string -> no crash, no thought", out == [])
+
+
+def test_per_soldier_bare_json_array():
+    print("test_per_soldier_bare_json_array")
+    # Bare JSON array instead of an object: ["Alpha_1: ..."]
+    fake = FakeClient(['["Alpha_1: array text"]'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Alpha_1"]), "Situation:\nno contacts.", "")
+    check("bare array -> no crash, no thought", out == [])
+
+
+def test_extract_json_block_string_returns_none():
+    print("test_extract_json_block_string_returns_none")
+    check("bare string -> None", bridge.extract_json_block('"just a string"') is None)
+    check("bare array -> None", bridge.extract_json_block('["a", "b"]') is None)
+    check("dict still parsed", isinstance(bridge.extract_json_block('{"thought": "ok"}'), dict))
+
+
+def test_chatter_helper_empty_first_cycle():
+    print("test_chatter_helper_empty_first_cycle")
+    fresh = make_sitrep(["Bravo_1", "Bravo_2"])
+    check("no chatter before anyone spoke", bridge.get_squadmate_recent_thoughts(fresh, "Bravo_1") == "")
+
+
+def test_chatter_helper_excludes_self():
+    print("test_chatter_helper_excludes_self")
+    (bridge.SOLDIER_MEMORY_DIR / "Charlie_1.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Charlie_2.json").unlink(missing_ok=True)
+    bridge.log_soldier_exchange("Charlie_1", "I am Charlie 1 speaking", "calm", "EVENT: idle")
+    bridge.log_soldier_exchange("Charlie_2", "Charlie 2 here, moving up", "alert", "EVENT: idle")
+    sitrep = make_sitrep(["Charlie_1", "Charlie_2"])
+    chatter = bridge.get_squadmate_recent_thoughts(sitrep, "Charlie_1")
+    check("chatter has squadmate's words", "Charlie 2 here, moving up" in chatter)
+    check("chatter excludes own words", "I am Charlie 1 speaking" not in chatter)
+    check("chatter includes name + mood", "Charlie_2" in chatter and "alert" in chatter)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Charlie_1.json").unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Charlie_2.json").unlink(missing_ok=True)
+
+
+def test_chatter_fed_into_prompt():
+    print("test_chatter_fed_into_prompt")
+    (bridge.SOLDIER_MEMORY_DIR / "Delta_1.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Delta_2.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Delta_3.json").unlink(missing_ok=True)
+    bridge.log_soldier_exchange("Delta_2", "I hate ambushes, stay sharp", "nervous", "EVENT: contact")
+    bridge.log_soldier_exchange("Delta_3", "Covering you, Delta 1", "confident", "EVENT: contact")
+    fake = FakeClient(['{"thought": "Delta 2 is spooked, I got their back", "mood": "calm"}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Delta_1", "Delta_2", "Delta_3"]), "Situation:\nno contacts.", "EVENT: idle\n")
+    check("thought generated for first soldier", len(out) >= 1 and out[0]["name"] == "Delta_1")
+    msgs = fake.calls[0]
+    last_user = msgs[-1]["content"]
+    check("prompt has squadmate chatter block", "Squadmate chatter" in last_user)
+    check("prompt contains Delta_2's words", "I hate ambushes" in last_user)
+    check("prompt contains Delta_3's words", "Covering you" in last_user)
+    check("system prompt mentions reacting to squadmates", "Squadmate chatter" in msgs[0]["content"])
+    for n in ("Delta_1", "Delta_2", "Delta_3"):
+        bridge.SOLDIER_MEMORY_DIR.joinpath(f"{n}.json").unlink(missing_ok=True)
+
+
+def test_chatter_in_brief_log():
+    print("test_chatter_in_brief_log")
+    (bridge.SOLDIER_MEMORY_DIR / "Echo_1.json").unlink(missing_ok=True)
+    (bridge.SOLDIER_MEMORY_DIR / "Echo_2.json").unlink(missing_ok=True)
+    bridge.log_soldier_exchange("Echo_2", "Heard something in the treeline", "alert", "EVENT: contact")
+    fake = FakeClient(['{"thought": "Acknowledged", "mood": "calm"}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Echo_1", "Echo_2"]), "Situation:\nquiet.", "EVENT: idle\n")
+    # simulate what generate_ai_thoughts does: log exchange with chatter in brief
+    sitrep = make_sitrep(["Echo_1", "Echo_2"])
+    chatter = bridge.get_squadmate_recent_thoughts(sitrep, "Echo_1")
+    brief = "EVENT: idle"
+    if chatter:
+        heard = " ; ".join(l.strip("- ").strip() for l in chatter.splitlines())[:180]
+        brief += f" | heard: {heard}"
+    bridge.log_soldier_exchange("Echo_1", "Acknowledged", "calm", brief)
+    mem = bridge.load_soldier_memory("Echo_1")
+    conv = mem.get("conversation", [])
+    check("brief includes heard chatter", any("heard: " in m.get("content", "") and "treeline" in m.get("content", "") for m in conv if m.get("role") == "user"))
+    for n in ("Echo_1", "Echo_2"):
+        bridge.SOLDIER_MEMORY_DIR.joinpath(f"{n}.json").unlink(missing_ok=True)
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -174,6 +283,16 @@ def run_tests():
     test_history_fed_back_as_chat_turns()
     test_batched_fallback()
     test_batched_garbage_returns_empty()
+    test_per_soldier_string_in_wrapper()
+    test_batched_string_entries_dropped()
+    test_per_soldier_bare_json_string()
+    test_per_soldier_bare_json_array()
+    test_extract_json_block_string_returns_none()
+    print("=== A.2 soldier-to-soldier chatter unit tests ===")
+    test_chatter_helper_empty_first_cycle()
+    test_chatter_helper_excludes_self()
+    test_chatter_fed_into_prompt()
+    test_chatter_in_brief_log()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()

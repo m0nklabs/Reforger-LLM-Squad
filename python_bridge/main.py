@@ -428,6 +428,42 @@ def log_soldier_exchange(name: str, thought: str, mood: str, situation_brief: st
 
 
 
+def get_squadmate_recent_thoughts(sitrep, self_name: str, max_mates: int = 4) -> str:
+    """A.2: Most recent transmission from each squadmate (from their memory).
+
+    Reads the last assistant message in each squadmate's conversation log
+    (fallback: thought_history for older files). Used so soldiers can react
+    to EACH OTHER's words, not just to the situation. Excludes self.
+    Returns a compact multi-line string ("- Name (mood): \"...\"") or ""
+    when nobody has spoken yet (first cycle).
+    """
+    lines = []
+    for m in sitrep.squad:
+        if m.name == self_name:
+            continue
+        mem = load_soldier_memory(m.name)
+        thought = ""
+        mood = ""
+        conv = mem.get("conversation", [])
+        # Last assistant message = their most recent words
+        for msg in reversed(conv):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                thought = str(msg.get("content", ""))[:120]
+                mood = str(msg.get("mood", ""))[:20]
+                break
+        if not thought:
+            hist = mem.get("thought_history", [])
+            if hist:
+                thought = str(hist[-1].get("thought", ""))[:120]
+                mood = str(mem.get("mood", ""))[:20]
+        if thought:
+            mood_suffix = f" ({mood})" if mood and mood != "neutral" else ""
+            lines.append(f"- {m.name}{mood_suffix}: \"{thought}\"")
+        if len(lines) >= max_mates:
+            break
+    return "\n".join(lines)
+
+
 def sanitize_soldier_name(name: str) -> str:
     """Strip rank prefixes the LLM sometimes prepends ("CPL Alpha_1" -> "Alpha_1").
     Keeps the canonical callsign so memory files stay consistent."""
@@ -788,7 +824,11 @@ def extract_json_block(content: str):
             return repaired
     # Last resort: try the raw text as JSON
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        # Contract: only dicts are valid here. A bare JSON string/array
+        # ("Alpha_1: ..." or ["..."]) means the LLM didn't emit an object -
+        # return None so callers take their fallback path instead of crashing.
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         return None
 
@@ -977,6 +1017,10 @@ rookie; your role shapes what you notice.
 
 CRITICAL: Do NOT repeat or paraphrase your own earlier thoughts. Each thought must be NEW.
 
+You also hear your squadmates' most recent radio transmissions (included in the situation
+as "Squadmate chatter"). React to them when it matters: acknowledge, answer, reassure,
+or push back - real soldiers talk to each other, not just to the situation.
+
 OPTIONAL tool (only call when the situation genuinely warrants action - most of the time omit it):
 - report_contact(direction, distance, count): enemy sighting, report to squad
 - report_clear(): area is clear
@@ -1114,6 +1158,8 @@ def generate_ai_thoughts(event: str = ""):
     # (thought_history + conversation log). F8.3: process optional tool calls.
     event_brief = event_context.strip().splitlines()[0][:120] if event_context.strip() else "CONTEXT: routine situation"
     for t in thoughts:
+        if not isinstance(t, dict):  # drift guard: LLM emitted a non-object entry
+            continue
         tname = sanitize_soldier_name(t.get("name", "?"))
         tthought = t.get("thought", "")
         tmood = t.get("mood", "neutral")
@@ -1121,6 +1167,10 @@ def generate_ai_thoughts(event: str = ""):
         brief = event_brief
         if member:
             brief += f" | your status: order={member.order}, sitrep={member.sitrep}"
+        chatter = get_squadmate_recent_thoughts(sitrep, tname)  # A.2: keep chatter in the log
+        if chatter:
+            heard = " ; ".join(l.strip("- ").strip() for l in chatter.splitlines())[:180]
+            brief += f" | heard: {heard}"
         log_soldier_exchange(tname, tthought, tmood, brief)
         tool = t.get("tool")
         if isinstance(tool, dict) and tool.get("name"):
@@ -1146,11 +1196,13 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         history = get_soldier_history_summary(m.name, max_events=5)
         own_thoughts = get_soldier_thought_history(m.name)
         social = get_social_summary(m.name)  # F8.4: relationships + opinions
+        chatter = get_squadmate_recent_thoughts(sitrep, m.name)  # A.2
         member_lines.append(
             f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
             f"{social}\n"
             f"  Own recent thoughts:\n{own_thoughts}\n"
-            f"  Current: order={m.order}, sitrep={m.sitrep}"
+            + (f"  Squadmate chatter heard:\n{chatter}\n" if chatter else "")
+            + f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
 
     members_text = "\n".join(member_lines)
@@ -1160,7 +1212,8 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         "Generate one thought per member reacting to the situation. The thought should reflect "
         "their rank, role, backstory AND their personal experiences. A veteran who has survived "
         "5 battles sounds different from a rookie on their first day. A medic thinks about wounds, "
-        "a grenadier about angles. Stay in character.\n\n"
+        "a grenadier about angles. Stay in character.\n"
+        "Members may ALSO react to what their squadmates said recently (shown as 'Squadmate chatter heard').\n\n"
         "TOOLS: each member may include an optional \"tool\" field in their JSON object when "
         "the situation genuinely calls for action. Use report_contact for enemy sightings, "
         "call_medic when a squadmate is down, suggest_tactic to propose a formation change, "
@@ -1190,6 +1243,8 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         thoughts = data.get("thoughts", data) if isinstance(data, dict) else data
         if not isinstance(thoughts, list):
             thoughts = []
+        # Drift guard: drop non-object entries (proxy sometimes emits strings)
+        thoughts = [t for t in thoughts if isinstance(t, dict)]
         app_state["llm_calls"] += 1
         return thoughts
     except Exception as e:
@@ -1228,11 +1283,18 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
         conv = [c for c in mem.get("conversation", []) if isinstance(c, dict) and c.get("role")]
         history = conv[-12:]
 
+        # A.2: squadmate chatter - their most recent words from the previous cycle
+        chatter = get_squadmate_recent_thoughts(sitrep, name)
         user_content = (
             f"[NOW] {event_brief}\n\n"
             f"{situation}\n"
             f"Your status: order={m.order}, sitrep={m.sitrep}"
         )
+        if chatter:
+            user_content += (
+                f"\n\nSquadmate chatter (their most recent words - react if it matters):\n"
+                f"{chatter}"
+            )
         try:
             response = client.chat.completions.create(
                 model=CONFIG["llm"]["model"],
@@ -1246,11 +1308,14 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
             if not data:
                 logger.warning(f"[A.1] {name}: unparseable thought output: {content[:100]!r}")
                 continue
-            # Accept a bare thought object OR an old-style {"thoughts": [...]} wrapper
+            # Accept a bare thought object OR an old-style {"thoughts": [...]} wrapper.
+            # Drift guard: the proxy sometimes wraps plain TEXT in the list
+            # ({"thoughts": ["Alpha_1: ..."]}) — salvage the string as the thought.
+            obj = data
             if isinstance(data.get("thoughts"), list) and data["thoughts"]:
                 obj = data["thoughts"][0]
-            else:
-                obj = data
+            if isinstance(obj, str):
+                obj = {"thought": obj}
             if not isinstance(obj, dict) or not obj.get("thought"):
                 logger.warning(f"[A.1] {name}: no thought text in output: {content[:100]!r}")
                 continue
