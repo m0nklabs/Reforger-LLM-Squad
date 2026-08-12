@@ -651,7 +651,17 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
     if leader_state != "alive":
         lines.append(f"LEADER STATUS: {leader_state.upper()}!")
     for m in sitrep.squad:
-        lines.append(f"  {m.name}: order={m.order}, sitrep={m.sitrep}")
+        # F8.7: Include soldier mood + last thought so the adjutant LLM
+        # (which issues orders) knows how the squad feels, not just positions.
+        mem = load_soldier_memory(m.name)
+        mood = mem.get("mood", "")
+        last_thought = (mem.get("last_thought") or "")[:80]
+        base = f"  {m.name}: order={m.order}, sitrep={m.sitrep}"
+        if mood and mood != "neutral":
+            base += f", mood={mood}"
+        if last_thought:
+            base += f", thinking=\"{last_thought}\""
+        lines.append(base)
     # F3.4: Enemy contact info
     if sitrep.enemy_count > 0 and sitrep.enemies:
         lines.append(f"ENEMY CONTACT: {sitrep.enemy_count} hostiles detected:")
