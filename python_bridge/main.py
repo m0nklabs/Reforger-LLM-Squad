@@ -177,8 +177,12 @@ Remember events from RECENT BATTLE EVENTS when making decisions — this is your
 
 
 # ─── F7: Individual AI Soldier Memory ──────────────────────────────────
-SOLDIER_MEMORY_DIR = Path("ai_soldiers")
-SOLDIER_GRAVEYARD_DIR = Path("ai_soldiers/graveyard")
+# NOTE: absolute paths based on this file's location — a relative path like
+# Path("ai_soldiers") depends on the CWD (bridge started from python_bridge/,
+# but dev-loop pi runs from the repo root and would create a stray folder).
+_BRIDGE_DIR = Path(__file__).resolve().parent
+SOLDIER_MEMORY_DIR = _BRIDGE_DIR / "ai_soldiers"
+SOLDIER_GRAVEYARD_DIR = _BRIDGE_DIR / "ai_soldiers" / "graveyard"
 SOLDIER_RETENTION_DAYS = 7  # Keep dead soldier files for 7 days
 
 def ensure_soldier_dirs():

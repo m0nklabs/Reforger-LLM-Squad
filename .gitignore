@@ -53,6 +53,7 @@ scripts/run_dedicated.bat
 scripts/dev_loop*.log
 scripts/dev_loop_iter_*.out
 scripts/dev_loop_iter_*.err
+scripts/dev_loop_prompt_*.txt
 
 # Tools / local
 tools/
