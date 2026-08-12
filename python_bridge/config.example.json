@@ -45,5 +45,12 @@
     "engine": "auto",
     "rate": 150,
     "volume": 0.9
+  },
+  "chatter": {
+    "enabled": true,
+    "min_interval_seconds": 45,
+    "max_interval_seconds": 150,
+    "quiet_seconds": 30,
+    "max_per_session": 12
   }
 }
