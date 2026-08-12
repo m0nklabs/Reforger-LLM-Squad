@@ -30,9 +30,8 @@ echo [INFO] Bridge URL: http://127.0.0.1:5001
 echo [INFO] Proxy URL:  http://192.168.1.35:11434/v1
 echo [INFO] Model:      llama3
 echo.
-echo [NEXT] Launch Arma Reforger with:
-echo        launch_reforger.bat
-echo        (uses -addonsDir + -addons, NEVER -mod; see MOD_SETUP.md)
+echo [NEXT] Start the dedicated server with:
+echo        launch_ds.bat        (DS is the only dev workflow — see AGENTS.md)
 echo.
 echo [TIP]  Open http://127.0.0.1:5001/docs for API docs
 echo [TIP]  Check python_bridge\bridge.log for details

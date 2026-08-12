@@ -29,7 +29,10 @@ $errors = Select-String -Path $f -Pattern '\(E\)' | ForEach-Object { $_.Line.Tri
 if ($errors) { $errors | Select-Object -First 12 | ForEach-Object { $_ } } else { Write-Output '(none)' }
 
 $compileFail = Select-String -Path $f -Pattern "Can't compile" -SimpleMatch -Quiet
-$ours = $errors | Select-String -Pattern 'LLMBridge','ReforgerLLMSquad'
+# BUGFIX: match ALL our script files, not just LLMBridge — an error in
+# AutoSquadManager.c/StavkaController.c/etc. has the file name in the error
+# line but NOT 'ReforgerLLMSquad' or 'LLMBridge' (path is @"scripts/Game/...").
+$ours = $errors | Select-String -Pattern 'LLMBridge','AutoSquadManager','StavkaController','AutoConnectMenu','LLMAutoConnect','SCR_BaseGameMode'
 
 if ($compileFail -or $ours -or -not $mod) {
     Write-Output 'NO-GO: compile error or errors in our files — fix the FIRST error in our .c file (the rest is often cascade)'
