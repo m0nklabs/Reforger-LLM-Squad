@@ -49,6 +49,11 @@ scripts/q_start_scenario.bat
 scripts/check_server_dl.bat
 scripts/run_dedicated.bat
 
+# Dev loop logs
+scripts/dev_loop*.log
+scripts/dev_loop_iter_*.out
+scripts/dev_loop_iter_*.err
+
 # Tools / local
 tools/
 tools/wb_*.txt
