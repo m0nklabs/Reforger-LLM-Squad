@@ -480,7 +480,13 @@ class LLMBridge
 		if (cmd == "spawn")
 		{
 			Print("[LLMBridge] Executing spawn order...");
-			SCR_AIWorld.LiveSpawnSquad(1);
+			// BUGFIX: was hardcoded LiveSpawnSquad(1) — after reconnect the player
+			// may not be playerID 1. Find the first connected player dynamically.
+			int spawnPid = GetFirstPlayerID();
+			if (spawnPid > 0)
+				SCR_AIWorld.LiveSpawnSquad(spawnPid);
+			else
+				Print("[LLMBridge] spawn order: no player connected");
 		}
 		else if (cmd == "hold")
 		{
@@ -920,6 +926,20 @@ class LLMBridge
 	{
 		for (int i = 0; i < m_aSquadMembers.Count(); i++)
 			m_aSquadMembers[i].m_sCurrentOrder = sOrder;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Find the first connected player ID (1-32), or 0 if none
+	int GetFirstPlayerID()
+	{
+		PlayerManager pm = GetGame().GetPlayerManager();
+		if (!pm) return 0;
+		for (int pid = 1; pid <= 32; pid++)
+		{
+			if (pm.GetPlayerControlledEntity(pid))
+				return pid;
+		}
+		return 0;
 	}
 
 	//------------------------------------------------------------------------------------------------

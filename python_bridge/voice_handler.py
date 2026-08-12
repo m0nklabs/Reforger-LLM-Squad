@@ -152,8 +152,17 @@ class VoiceHandler:
             logger.warning("[PTT] No audio captured")
             return
 
+        # BUGFIX: copy chunks BEFORE releasing _recording state — a fast re-press
+        # resets self._audio_chunks in _on_ptt_press, and np.concatenate would
+        # crash with "need at least one array" killing the keyboard hook thread.
+        chunks = list(self._audio_chunks)
+
         # Concatenate audio chunks
-        audio = np.concatenate(self._audio_chunks, axis=0).flatten()
+        try:
+            audio = np.concatenate(chunks, axis=0).flatten()
+        except Exception as e:
+            logger.error(f"[PTT] Audio concat failed: {e}")
+            return
         duration = len(audio) / self._samplerate
         logger.info(f"[PTT] Captured {duration:.1f}s of audio ({len(audio)} samples)")
 
@@ -180,7 +189,10 @@ class VoiceHandler:
             self._last_transcription_time = time.time()
 
             if text and self._on_transcription:
-                self._on_transcription(text)
+                # BUGFIX: run the callback (LLM call, ~2-5s blocking) in a separate
+                # thread — otherwise the keyboard hook thread is blocked and PTT
+                # presses during transcription are lost.
+                threading.Thread(target=self._on_transcription, args=(text,), daemon=True).start()
 
         except Exception as e:
             logger.error(f"[PTT] Whisper transcription failed: {e}")

@@ -761,16 +761,24 @@ modded class SCR_AIWorld
 		SCR_AIGroup grp = s_PlayerGroup;
 		if (!grp) { Print("[AutoSquad] LiveDespawn: no group"); return; }
 
+		// BUGFIX: AI agents live in the SLAVE group (after MoveAgentsToSlaveGroup),
+		// not the master group. Despawning from the master group found 0 agents.
+		SCR_AIGroup slaveGroup = grp.GetSlave();
+		SCR_AIGroup targetGroup = slaveGroup;
+		if (!targetGroup) targetGroup = grp; // fallback: no slave group yet
+
 		array<AIAgent> agents = {};
-		grp.GetAgents(agents);
-		Print("[AutoSquad] LiveDespawn: removing " + agents.Count() + " AI agents");
+		targetGroup.GetAgents(agents);
+		string sGroupType = "master";
+		if (slaveGroup) sGroupType = "slave";
+		Print("[AutoSquad] LiveDespawn: removing " + agents.Count() + " AI agents from " + sGroupType + " group");
 
 		for (int i = agents.Count() - 1; i >= 0; i--)
 		{
 			AIAgent agent = agents[i];
 			if (agent)
 			{
-				grp.RemoveAgent(agent);
+				targetGroup.RemoveAgent(agent);
 				Print("[AutoSquad] LiveDespawn: removed agent #" + i);
 			}
 		}
@@ -794,8 +802,18 @@ modded class SCR_PlayerController
 			return;
 		if (!to)
 			return;
+
+		// BUGFIX: previously `if (m_bAutoSquadDone && from) return;` blocked ALL
+		// re-triggers after the first spawn — including RESPAWN. The RESPAWN branch
+		// in DeferredAutoSquad (re-link existing slave group) was dead code.
+		// Now: skip only if the previous entity is still alive (normal change);
+		// if the old entity was destroyed (death/respawn), re-run the squad flow.
 		if (m_bAutoSquadDone && from)
-			return;
+		{
+			SCR_DamageManagerComponent dmgFrom = SCR_DamageManagerComponent.Cast(from.FindComponent(SCR_DamageManagerComponent));
+			if (!dmgFrom || !dmgFrom.IsDestroyed())
+				return;  // previous entity alive — not a respawn, skip
+		}
 
 		int playerID = GetPlayerId();
 		if (playerID <= 0)

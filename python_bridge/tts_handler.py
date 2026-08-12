@@ -144,13 +144,17 @@ class TTSHandler:
             # Generate audio file
             tmp_file = os.path.join(tempfile.gettempdir(), f"reforger_tts_{threading.get_ident()}.mp3")
 
-            # Run edge-tts in the dedicated event loop
-            async def _generate():
-                communicate = edge_tts.Communicate(text, voice)
-                await communicate.save(tmp_file)
+            # BUGFIX: guard the shared asyncio loop with a lock — speak() spawns a
+            # new thread per call and two overlapping calls would hit
+            # "This event loop is already running" on the second run_until_complete.
+            with self._lock:
+                # Run edge-tts in the dedicated event loop
+                async def _generate():
+                    communicate = edge_tts.Communicate(text, voice)
+                    await communicate.save(tmp_file)
 
-            asyncio.set_event_loop(self._loop)
-            self._loop.run_until_complete(_generate())
+                asyncio.set_event_loop(self._loop)
+                self._loop.run_until_complete(_generate())
 
             if not os.path.exists(tmp_file):
                 return False
