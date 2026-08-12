@@ -84,7 +84,7 @@ and make no further changes.
 
     $output = ''
     if (Test-Path $outFile) {
-        $output = Get-Content $outFile -Raw -Encoding UTF8
+        $output = (Get-Content $outFile -Raw -Encoding UTF8) -join "`n"
         Remove-Item $outFile -Force -ErrorAction SilentlyContinue
     }
     if (Test-Path "$outFile.err") {
