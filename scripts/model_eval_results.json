@@ -1,0 +1,16 @@
+[
+  {
+    "model": "phi4",
+    "samples": 1,
+    "errors": 0,
+    "valid_json_rate": 0.0,
+    "thought_rate": 0.0,
+    "tool_rate": 0.0,
+    "mood_valid_rate": 0.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 26.98,
+    "cold_start_s": 26.98,
+    "avg_completion_tokens": 600.0,
+    "samples_with_tools": []
+  }
+]

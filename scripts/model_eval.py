@@ -147,7 +147,7 @@ def evaluate_model(client, model: str, samples: int, max_tokens: int) -> dict:
         "avg_latency_s": round(sum(latencies) / max(1, len(latencies)), 2),
         "cold_start_s": round(latencies[0], 2) if latencies else None,
         "avg_completion_tokens": round(sum(completion_tokens) / max(1, len(completion_tokens)), 1) if completion_tokens else None,
-        "samples_with_tools": [t for t in sample_thoughts if t],
+        "sample_thoughts": [t for t in sample_thoughts if t],
     }
 
 
