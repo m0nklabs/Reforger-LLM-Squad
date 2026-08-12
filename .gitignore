@@ -2,6 +2,8 @@
 python_bridge/venv/
 python_bridge/__pycache__/
 python_bridge/bridge.log
+python_bridge/bridge_output.log
+python_bridge/ai_soldiers/
 *.pyc
 
 # Secrets/config — template: python_bridge/config.example.json
@@ -17,11 +19,37 @@ docs/README.md
 # Lokale deprecated rommel (oudere foutieve mod-structuur)
 reforger_mod/_deprecated/
 
+# Fetched reference docs (runtime research artefacts, not source)
+docs_fetched/
+docs/api/doxygen_extract/
+
+# AI agent tool state
+.goose/
+
+# Debug artefacts
+latest_console.log
+
 # Temp
 *.tmp
-`n# Debug artefacts`n$null`nConflict`npick`nlatest_console.log`ndocs_fetched/`npython_bridge/bridge_output.log`npython_bridge/bridge_output.log)`nreforger_mod/addons/ReforgerLLMSquad/resourceDatabase.rdb`n`n# Temp scripts`nscripts/_*.bat`nscripts/check_server*.bat`nscripts/check_server*.ps1`nscripts/check_status.bat`nscripts/connect_client.bat`nscripts/launch_*.bat`nscripts/read_server_log.*`nscripts/reset_profile.bat`nscripts/run_*.bat`nscripts/showlog.bat`nscripts/start_*.bat`nscripts/q_start_scenario.bat`nscripts/check_server_dl.bat`nscripts/run_dedicated.bat`n
-  
-tools/  
-tools/wb_*.txt  
-reforger_mod/addons/ReforgerLLMSquad/resourceDatabase.rdb  
-server.json  
+reforger_mod/addons/ReforgerLLMSquad/resourceDatabase.rdb
+
+# Temp scripts
+scripts/_*.bat
+scripts/check_server*.bat
+scripts/check_server*.ps1
+scripts/check_status.bat
+scripts/connect_client.bat
+scripts/launch_*.bat
+scripts/read_server_log.*
+scripts/reset_profile.bat
+scripts/run_*.bat
+scripts/showlog.bat
+scripts/start_*.bat
+scripts/q_start_scenario.bat
+scripts/check_server_dl.bat
+scripts/run_dedicated.bat
+
+# Tools / local
+tools/
+tools/wb_*.txt
+server.json

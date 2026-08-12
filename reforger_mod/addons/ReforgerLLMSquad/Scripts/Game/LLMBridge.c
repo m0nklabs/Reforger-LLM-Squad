@@ -329,6 +329,13 @@ class LLMBridge
 
 	//------------------------------------------------------------------------------------------------
 	// F6: Detect player downed/dead state
+	// Uses public DamageManagerComponent API only (verified against local Workbench
+	// ArmaReforgerScriptAPIPublic.zip docs + compiler):
+	// - IsDestroyed()            -> dead  (proto external, public)
+	// - GetHealthScaled() < 0.15 -> downed (critically low health = incapacitated)
+	// NOTE: ShouldBeUnconscious() and IsIndefinitelyUnconscious() are PROTECTED
+	// on SCR_CharacterDamageManagerComponent — not callable from our script.
+	// Returns: "alive" | "downed" | "dead"
 	string GetPlayerLifeState()
 	{
 		PlayerManager pm = GetGame().GetPlayerManager();
@@ -339,11 +346,18 @@ class LLMBridge
 			IEntity playerEnt = pm.GetPlayerControlledEntity(pid);
 			if (!playerEnt) continue;
 
-			// TODO: Reforger build 190965 does not expose ChimeraCharacterController
-			// or SCR_CharacterController as usable script types for Cast/FindComponent.
-			// Future: find the correct API (possibly via DamageManagerComponent or
-			// entity health checks) to detect downed/incapacitated state.
-			// For now, if the player entity exists, they are alive.
+			// F6: Damage manager (SCR_CharacterDamageManagerComponent extends SCR_DamageManagerComponent
+			// extends DamageManagerComponent; FindComponent on the SCR_ subclass works and the
+			// base public methods are inherited)
+			SCR_DamageManagerComponent dmgMgr = SCR_DamageManagerComponent.Cast(
+				playerEnt.FindComponent(SCR_DamageManagerComponent));
+			if (!dmgMgr) return "alive";
+
+			if (dmgMgr.IsDestroyed()) return "dead";
+
+			// Downed: health critically low (incapacitated). GetHealthScaled() returns 0..1.
+			if (dmgMgr.GetHealthScaled() < 0.15) return "downed";
+
 			return "alive";
 		}
 		return "alive";

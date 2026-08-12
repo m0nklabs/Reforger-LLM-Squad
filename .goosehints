@@ -86,13 +86,13 @@ Never invent these — every single one has already gone wrong once:
 25. **AutoSquad retry + dynamic group lookup**: On DS, players spawn BEFORE joining a group. AutoSquad retries every 10s for 3min + dynamically looks up group each SITREP.
 26. **QueryEntitiesBySphere needs callback function**: Define module-level `bool QueryEntityCallback(IEntity ent)` and call `QueryEntitiesBySphere(pos, 60, QueryEntityCallback)`.
 27. **EGetOutType enum not publicly documented**: Use `AskOwnerToGetOutFromVehicle()` instead of `GetOutVehicle()`.
-28. **ChimeraCharacterController NOT available as script type**: Cannot use `Cast()` or `FindComponent()` for character controllers. Avoid `GetLifeState()`, `IsUnconscious()`, `IsDead()`. Investigate `DamageManagerComponent` or `SCR_DamageManagerComponent` for health state detection.
+28. **ChimeraCharacterController NOT available as script type**: Cannot use `Cast()` or `FindComponent()` for character controllers. Health state detection WORKS via `SCR_DamageManagerComponent` (extends `DamageManagerComponent`): `IsDestroyed()` → dead, `GetHealthScaled() < 0.15` → downed. NOTE: `ShouldBeUnconscious()` and `IsIndefinitelyUnconscious()` on `SCR_CharacterDamageManagerComponent` are PROTECTED — compile error if called. API source: `Arma Reforger Tools\Workbench\docs\ArmaReforgerScriptAPIPublic.zip` (local!).
 29. **Enforce Script `%` modulo operator not supported on floats**: Use fixed constants or integer math instead.
 30. **Faction must be set via FactionManager, not group components**: `SCR_AIGroup` does NOT have `FactionAffiliationComponent`. Use `FactionManager.GetPlayerFaction(playerID)` directly and set faction on each soldier via `FactionAffiliationComponent.SetAffiliatedFaction()`.
 31. **Dynamic faction**: Squad soldier prefab + OPFOR faction adapt to player faction. US player → US squad + USSR OPFOR. USSR player → USSR squad + US OPFOR.
 32. **Stavka disabled**: Stavka OPFOR spawning disabled — vanilla 23_Campaign already has OPFOR/FIA forces. Controller kept alive for future use.
 33. **F5: Battle Memory**: Bridge maintains rolling `battle_log` (15 events) in `app_state`. Included in LLM prompt. Events: ORDER, CONTACT, CRITICAL, RECOVERY.
-34. **F6: Medic Rescue**: `leader_state` (alive/downed/dead) in SITREP JSON + fingerprint. MEDIC action in LLM enum. Downed detection TODO (rule 28).
+34. **F6: Medic Rescue (IMPLEMENTED)**: `leader_state` (alive/downed/dead) in SITREP JSON + fingerprint. MEDIC action in LLM enum. Detection via `SCR_DamageManagerComponent` (rule 28).
 35. **Event-driven thoughts**: Replaced 30s timer with event detection. Thoughts trigger on: contact, clear, order_change, casualty, idle (60s fallback). 15s cooldown.
 36. **Eureka Workflow (MANDATORY)**: At every eureka moment: update AGENTS.md → `sync-agent-docs.bat` → commit → `git push origin main`.
 37. **AGENTS.md Maintenance**: Keep current. After every feature → update Status & roadmap. After every lesson → add a rule. Remove obsolete info. Push to GitHub.
@@ -116,7 +116,7 @@ Never invent these — every single one has already gone wrong once:
 - **Phase 3**: TTS squad feedback (edge-tts + pyttsx3 fallback)
 - **F4**: Vehicle mount/dismount commands + Stavka offset fix
 - **F5**: Battle Memory (rolling battle_log in LLM prompt)
-- **F6**: Medic Rescue (leader_state tracking, MEDIC action — downed detection TODO)
+- **F6**: Medic Rescue (leader_state tracking, MEDIC action, downed detection via SCR_DamageManagerComponent)
 - **F7**: Individual AI soldier memory (`ai_soldiers/{name}.json` per soldier)
 - **Event-driven thoughts** (contact/clear/order_change/casualty/idle, 15s cooldown)
 - **Dynamic faction** (squad + OPFOR adapt to player faction)
