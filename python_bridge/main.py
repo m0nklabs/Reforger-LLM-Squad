@@ -101,6 +101,7 @@ class SitRepMember(BaseModel):
     name: str = ""
     order: str = "HOLD"
     sitrep: str = "clear"
+    identity: str = ""  # A.4: in-game identity from SCR_CharacterIdentityComponent (name+alias)
 
 class SitRepRequest(BaseModel):
     source: str = "game"
@@ -1290,6 +1291,11 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
         )
         if social:
             system_content += "\n\nSquad social context:\n" + social
+        if m.identity:
+            # A.4: real in-game identity (from SCR_CharacterIdentityComponent.
+            # GetFormattedFullName on the game side) - grounds the persona in
+            # what the character is actually named in the world.
+            system_content += "\n\nIn-game identity (military records): " + m.identity
 
         # Own conversation history (last 6 exchanges = 12 messages) as real chat turns
         conv = [c for c in mem.get("conversation", []) if isinstance(c, dict) and c.get("role")]

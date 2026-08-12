@@ -325,6 +325,29 @@ def test_tool_result_in_batched_lines():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Hotel_1.json").unlink(missing_ok=True)
 
 
+def test_identity_fed_into_system_prompt():
+    print("test_identity_fed_into_system_prompt")
+    (bridge.SOLDIER_MEMORY_DIR / "India_1.json").unlink(missing_ok=True)
+    sitrep = bridge.SitRepRequest(squad=[bridge.SitRepMember(name="India_1", order="HOLD", sitrep="clear", identity="Miller 'Ghost' Johnson")])
+    fake = FakeClient(['{"thought": "Ghost here, holding", "mood": "calm"}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(sitrep, "Situation:\nquiet.", "")
+    msgs = fake.calls[0]
+    check("in-game identity in system prompt", "Miller 'Ghost' Johnson" in msgs[0]["content"])
+    bridge.SOLDIER_MEMORY_DIR.joinpath("India_1.json").unlink(missing_ok=True)
+
+
+def test_no_identity_no_block():
+    print("test_no_identity_no_block")
+    (bridge.SOLDIER_MEMORY_DIR / "Juliet_1.json").unlink(missing_ok=True)
+    fake = FakeClient(['{"thought": "Holding", "mood": "calm"}'])
+    bridge.client = fake
+    out = bridge._generate_thoughts_per_soldier(make_sitrep(["Juliet_1"]), "Situation:\nquiet.", "")
+    msgs = fake.calls[0]
+    check("no identity block when game sends none", "military records" not in msgs[0]["content"])
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Juliet_1.json").unlink(missing_ok=True)
+
+
 def run_tests():
     print("=== A.1 per-soldier thought unit tests ===")
     test_exchange_logging()
@@ -349,6 +372,9 @@ def run_tests():
     test_tool_result_stored_and_fed_back()
     test_no_result_no_consequence_block()
     test_tool_result_in_batched_lines()
+    print("=== A.4 identity integration unit tests ===")
+    test_identity_fed_into_system_prompt()
+    test_no_identity_no_block()
     # cleanup test soldier
     (bridge.SOLDIER_MEMORY_DIR / "Alpha_9.json").unlink(missing_ok=True)
     print()
