@@ -303,6 +303,15 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
         </div>
       </div>
     </div>
+
+    <!-- Voice / STT Status (F8.11) -->
+    <div class="panel" id="voicePanel" style="display:none">
+      <div class="panel-header">Voice (STT)</div>
+      <div class="panel-body">
+        <div id="voiceStatus" style="font-size:11px;color:var(--text-secondary)">Loading...</div>
+        <div id="voiceTranscript" style="font-size:11px;margin-top:6px;color:#8be9fd;font-style:italic"></div>
+      </div>
+    </div>
   </main>
 
   <!-- ====== RIGHT SIDEBAR — THOUGHTS & ROSTER ====== -->
@@ -693,13 +702,36 @@ function closeSoldierDetail(){
   document.getElementById('soldierDetail').style.display = 'none';
 }
 
+// ====== Voice / STT status poll (F8.11) ======
+async function pollVoice(){
+  try{
+    const resp = await fetch(API_BASE + '/voice');
+    const v = await resp.json();
+    const panel = document.getElementById('voicePanel');
+    if(!v.enabled){ panel.style.display='none'; return; }
+    panel.style.display='block';
+    const status = document.getElementById('voiceStatus');
+    const dot = v.recording ? '🔴' : (v.running ? '🟢' : '⚪');
+    status.innerHTML = dot + ' PTT: <b>'+escapeHtml(v.ptt_key)+'</b> · Model: '+escapeHtml(v.model) +
+      (v.model_loaded ? '' : ' (not loaded)') + (v.running ? '' : ' (stopped)');
+    const t = document.getElementById('voiceTranscript');
+    if(v.last_transcription){
+      t.textContent = '\"' + v.last_transcription + '\"' + (v.last_transcription_age !== null ? ' ('+Math.round(v.last_transcription_age)+'s ago)' : '');
+    } else {
+      t.textContent = '';
+    }
+  } catch(e){ /* silent */ }
+}
+
 // ====== Start polling ======
 pollHealth();
 pollStatus();
 pollSoldiers();
+pollVoice();
 setInterval(pollHealth, POLL_HEALTH_MS);
 setInterval(pollStatus, POLL_STATUS_MS);
 setInterval(pollSoldiers, POLL_SOLDIERS_MS);
+setInterval(pollVoice, 5000);
 </script>
 </body>
 </html>

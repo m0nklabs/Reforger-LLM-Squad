@@ -148,6 +148,7 @@ Never invent these — every single one has already gone wrong once:
 - **F8.8: Opinion refresh + graveyard in dashboard (IMPLEMENTED)**: Opinions now UPDATE when the relationship score crosses into a new label (reliable → brother-in-arms) instead of freezing on the first label. `/soldiers` returns `graveyard` (archived KIA); dashboard shows a faded KIA section below the roster.
 - **F8.9: Audible soldier tool calls (IMPLEMENTED)**: `report_contact` → spoken "Contact! N hostiles, X meters, DIR!" and `call_medic` → "Medic! TARGET is down!" via TTS with the soldier's own voice (Alpha_N → voice index N-1).
 - **F8.10: Soldier detail panel in dashboard (IMPLEMENTED)**: `/soldiers?detail=1` returns full event log + thought history + identity (age/origin/deployments). Clicking a roster item opens a detail panel with backstory, meta, event log and recent thoughts.
+- **F8.11: Voice status panel in dashboard (IMPLEMENTED)**: Live STT status — PTT key, Whisper model, running/recording indicator (green/red dot) and the last transcription with age. Polls /voice every 5s.
 - **F8: AI Soldiers as Autonomous Agents (VISION)**: Evolution of F7. Each AI soldier is an autonomous LLM agent with:
   - **Identity System Prompt**: Name, faction, rank, role, chain of command (CO = player), squadmates, expectations
   - **Backstory**: Personal history (age, origin, time in theater, prior deployments, personality traits). From game data or generated at spawn. A rookie sounds different from a veteran.
