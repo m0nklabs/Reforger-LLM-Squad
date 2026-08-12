@@ -195,6 +195,71 @@ def ensure_soldier_dirs():
     REPORTS_DIR.mkdir(exist_ok=True)
 
 
+# ─── B.4: Fatigue & session memory ────────────────────────────────────
+# Long sessions degrade soldiers: fatigue level rises with elapsed session
+# time and combat intensity (CONTACT/CRITICAL events accelerate it), drifts
+# rested moods toward tired/worn, and is fed into prompts so the LLM
+# roleplays the strain. At session end the after-action report persists a
+# deployment recap into each soldier's memory file (previous_deployments)
+# + reports/last_summary.json, so the squad remembers previous deployments
+# ACROSS bridge restarts (B.5's app_state-only summary was lost on restart).
+
+FATIGUE_LABELS = {0: "fresh", 1: "tired", 2: "exhausted", 3: "combat-worn"}
+# Rested moods drift under fatigue; event-driven moods (nervous/alert/scared)
+# are left alone - fear wins over exhaustion.
+FATIGUE_DRIFT_MOODS = {"calm", "steady", "confident", "neutral", ""}
+
+
+def _fatigue_cfg(key, default):
+    return (CONFIG.get("fatigue") or {}).get(key, default)
+
+
+def _compute_fatigue() -> dict:
+    """B.4: session fatigue from elapsed time + combat intensity.
+    Returns {"level": 0..3, "label": str, "minutes": float}."""
+    if not _fatigue_cfg("enabled", True):
+        return {"level": 0, "label": "fresh", "minutes": 0.0}
+    minutes = max(0.0, (time.time() - app_state.get("session_start_time", time.time())) / 60.0)
+    level = 0
+    if minutes >= _fatigue_cfg("worn_minutes", 75):
+        level = 3
+    elif minutes >= _fatigue_cfg("exhausted_minutes", 45):
+        level = 2
+    elif minutes >= _fatigue_cfg("tired_minutes", 20):
+        level = 1
+    # Combat intensity accelerates fatigue: sustained contact or CRITICALs
+    # (downed leader, casualties) wear the squad faster than time alone.
+    battle_log = app_state.get("battle_log", [])
+    criticals = sum(1 for e in battle_log if "CRITICAL" in e)
+    contacts = sum(1 for e in battle_log if "CONTACT" in e)
+    if criticals >= _fatigue_cfg("combat_acceleration_events", 3) or contacts >= _fatigue_cfg("contact_acceleration_events", 5):
+        level = min(3, level + 1)
+    return {"level": level, "label": FATIGUE_LABELS[level], "minutes": round(minutes, 1)}
+
+
+def update_soldier_fatigue(squad) -> dict:
+    """B.4: persist current fatigue into each alive member's memory file.
+    Writes only when the fatigue LEVEL changes (coarse, so file churn is
+    rare). Drifts a rested mood toward tired/worn at high fatigue, but
+    leaves event-driven moods (nervous/alert) untouched.
+    Returns the current squad fatigue dict (for prompt injection)."""
+    fatigue = _compute_fatigue()
+    for m in squad:
+        if not m.alive:
+            continue
+        mem = load_soldier_memory(m.name)
+        prev_level = (mem.get("fatigue") or {}).get("level", 0)
+        if prev_level == fatigue["level"]:
+            continue
+        mem["fatigue"] = dict(fatigue)
+        mood = mem.get("mood", "neutral")
+        if fatigue["level"] >= 2 and mood in FATIGUE_DRIFT_MOODS:
+            mem["mood"] = "tired" if fatigue["level"] == 2 else "worn"
+        save_soldier_memory(m.name, mem)
+        logger.info(f"[B.4] {m.name} fatigue -> {fatigue['label']} ({fatigue['minutes']:.0f} min)")
+    return fatigue
+
+
 # ─── B.5: After-action report ──────────────────────────────────────────
 # When a session ends (SITREP gap > SESSION_GAP_SECONDS), write a battle
 # report to reports/ and keep a one-line summary to feed into the NEXT
@@ -277,7 +342,42 @@ def _write_after_action_report() -> str:
     summary = "; ".join(parts)
     app_state["last_report_summary"] = summary
     app_state["last_report_path"] = str(path)
+
+    # B.4: persist the recap so it survives bridge restarts, and store a
+    # per-soldier copy in each alive member's memory file (the squad
+    # "remembers" its previous deployment). Reset fatigue for the next session.
+    try:
+        with open(REPORTS_DIR / "last_summary.json", "w", encoding="utf-8") as f:
+            json.dump({"summary": summary, "written": datetime.now().isoformat()}, f, ensure_ascii=False)
+    except IOError as e:
+        logger.warning(f"[B.4] last_summary.json write failed: {e}")
+    deploy_entry = {"date": datetime.now().strftime("%Y-%m-%d"), "summary": summary}
+    for filepath in SOLDIER_MEMORY_DIR.glob("*.json"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            if mem.get("status") != "alive":
+                continue
+            deploys = mem.get("previous_deployments") or []
+            if not deploys or deploys[-1].get("summary") != summary:
+                deploys.append(deploy_entry)
+                mem["previous_deployments"] = deploys[-3:]  # remember last 3 deployments
+            mem["fatigue"] = {"level": 0, "label": "fresh", "minutes": 0.0}
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(mem, f, ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, IOError):
+            pass
     return summary
+
+
+def _load_last_report_summary() -> str:
+    """B.4: load the persisted deployment recap (survives bridge restarts)."""
+    path = REPORTS_DIR / "last_summary.json"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return (json.load(f) or {}).get("summary", "")
+    except (json.JSONDecodeError, IOError):
+        return ""
 
 def load_soldier_memory(name: str) -> dict:
     """Load a soldier's personal memory file. Create if not exists."""
@@ -866,8 +966,10 @@ app_state = {
     # Player activity tracking
     "last_sitrep_time": time.time(),  # updated on every SITREP; LLM skipped if stale > 90s
     "session_start_time": time.time(),  # B.5: when the current session began
+    "session_had_members": False,       # B.5: any SITREP with a squad this session
     "last_report_summary": None,        # B.5: previous deployment recap for prompts
     "last_report_path": None,           # B.5: most recent report file
+    "fatigue": {"level": 0, "label": "fresh", "minutes": 0.0},  # B.4: current squad fatigue
     # F5: Battle Memory — rolling event log for LLM context
     "battle_log": [],                # last 15 events, included in LLM prompts
     "last_leader_state": "alive",
@@ -950,6 +1052,12 @@ def get_situation_text(sitrep: SitRepRequest) -> str:
     # F3.5: Environment description
     if sitrep.environment:
         lines.append(f"Environment: {sitrep.environment}")
+
+    # B.4: squad fatigue — long sessions wear the squad; the adjutant should
+    # account for it when ordering moves/engagements.
+    fatigue = _compute_fatigue()
+    if fatigue["level"] > 0:
+        lines.append(f"Squad fatigue: {fatigue['label']} after {fatigue['minutes']:.0f} min of combat — reduced endurance, slower reactions.")
 
     return "Squad status:\n" + "\n".join(lines) if lines else "No squad data."
 
@@ -1457,9 +1565,23 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
         own_thoughts = get_soldier_thought_history(m.name)
         social = get_social_summary(m.name)  # F8.4: relationships + opinions
         chatter = get_squadmate_recent_thoughts(sitrep, m.name)  # A.2
-        last_result = load_soldier_memory(m.name).get("last_tool_result")  # A.3
-        legacy = load_soldier_memory(m.name).get("legacy")  # B.1
+        mem = load_soldier_memory(m.name)
+        last_result = mem.get("last_tool_result")  # A.3
+        legacy = mem.get("legacy")  # B.1
         prev_deploy = app_state.get("last_report_summary")  # B.5
+        # B.4: per-soldier previous deployments (personal memory) + fatigue
+        own_deploys = mem.get("previous_deployments") or []
+        fatigue = mem.get("fatigue") or _compute_fatigue()
+        deploy_line = ""
+        if own_deploys:
+            deploy_line = "Previous deployments (personal memory): " + "; ".join(
+                f"{d.get('date', '?')}: {d.get('summary', '')}" for d in own_deploys[-3:]
+            )
+        elif prev_deploy:
+            deploy_line = f"Previous deployment (what the squad remembers): {prev_deploy}"
+        fatigue_line = ""
+        if fatigue.get("level", 0) > 0:
+            fatigue_line = f"  Physical state: {fatigue['label']} after {fatigue.get('minutes', 0):.0f} min in the field\n"
         member_lines.append(
             f"- {identity}\n  Personality: {p}\n  Backstory: {backstory}\n{history}\n"
             f"{social}\n"
@@ -1467,7 +1589,8 @@ def _generate_thoughts_batched(sitrep, situation, event_context):
             + (f"  Squadmate chatter heard:\n{chatter}\n" if chatter else "")
             + (f"  Last action result: {last_result}\n" if last_result else "")
             + (f"  Legacy: {legacy}\n" if legacy else "")
-            + (f"  Previous deployment: {prev_deploy}\n" if prev_deploy else "")
+            + (deploy_line + "\n" if deploy_line else "")
+            + fatigue_line
             + f"  Current: order={m.order}, sitrep={m.sitrep}"
         )
 
@@ -1556,9 +1679,24 @@ def _generate_thoughts_per_soldier(sitrep, situation, event_context):
             # B.1: replacement soldier - carries the predecessor's memory
             system_content += f"\n\nLegacy: {legacy}"
         prev_deploy = app_state.get("last_report_summary")
-        if prev_deploy:
-            # B.5: the squad remembers the previous deployment
+        own_deploys = mem.get("previous_deployments") or []
+        if own_deploys:
+            # B.4: this soldier's OWN memory of previous deployments
+            deploy_lines = "; ".join(
+                f"{d.get('date', '?')}: {d.get('summary', '')}" for d in own_deploys[-3:]
+            )
+            system_content += f"\n\nYour previous deployments (personal memory): {deploy_lines}"
+        elif prev_deploy:
+            # B.5: fallback — the squad remembers the previous deployment
             system_content += f"\n\nPrevious deployment (what the squad remembers): {prev_deploy}"
+        # B.4: physical state — fatigue from this session's length + combat
+        fatigue = mem.get("fatigue") or _compute_fatigue()
+        if fatigue.get("level", 0) > 0:
+            system_content += (
+                f"\n\nYour physical state: {fatigue['label']} after {fatigue.get('minutes', 0):.0f} "
+                f"min in the field — you feel it in your reactions and temper. "
+                f"Let the strain show in your thoughts."
+            )
 
         # Own conversation history (last 6 exchanges = 12 messages) as real chat turns
         conv = [c for c in mem.get("conversation", []) if isinstance(c, dict) and c.get("role")]
@@ -1631,7 +1769,10 @@ async def health_check():
         "players_active": (time.time() - app_state.get("last_sitrep_time", 0)) < 90,
         "secs_since_last_sitrep": round(time.time() - app_state.get("last_sitrep_time", 0), 1),
         "proxy": CONFIG["llm"]["base_url"], "model": CONFIG["llm"]["model"],
-        "tts_enabled": tts_handler.enabled
+        "tts_enabled": tts_handler.enabled,
+        # B.4: session length + fatigue for quick operator checks
+        "session_minutes": round((time.time() - app_state.get("session_start_time", time.time())) / 60, 1),
+        "fatigue": _compute_fatigue().get("label", "fresh")
     }
 
 # =======================================================================
@@ -1695,12 +1836,19 @@ def _check_session_boundary(now: float = None) -> bool:
     is written first (squad state is still intact at this point)."""
     now = now or time.time()
     prev = app_state.get("last_sitrep_time", now)
-    if app_state["sitrep_count"] > 1 and (now - prev) > SESSION_GAP_SECONDS:
-        # A session with soldiers is ending - snapshot it before resetting
-        if app_state.get("last_squad_names"):
+    # NOTE: called from receive_sitrep BEFORE sitrep_count is incremented, so
+    # the first SITREP ever sees count==0 (no boundary), and the SECOND SITREP
+    # sees count==1 - which is the earliest point a gap is measurable.
+    if app_state["sitrep_count"] > 0 and (now - prev) > SESSION_GAP_SECONDS:
+        # A session with soldiers is ending - snapshot it before resetting.
+        # Gate on session_had_members (set by receive_sitrep), NOT on
+        # last_squad_names (only updated by thought cycles - a session with
+        # SITREPs but no thoughts yet would silently lose its report).
+        if app_state.get("session_had_members"):
             _write_after_action_report()
         app_state["last_squad_names"] = []
         app_state["missing_soldiers"] = {}
+        app_state["session_had_members"] = False
         logger.info("Session boundary detected (SITREP gap > 90s) - squad state reset")
         return True
     return False
@@ -1725,6 +1873,11 @@ async def receive_sitrep(request: Request):
     else:
         sitrep = SitRepRequest(squad=[SitRepMember(name=f"Alpha_{i+1}") for i in range(4)])
     app_state["last_sitrep"] = sitrep
+    # B.4: track squad fatigue (session length + combat intensity). Runs even
+    # when the LLM is skipped below, so memory files stay current.
+    app_state["fatigue"] = update_soldier_fatigue(sitrep.squad)
+    if sitrep.squad:
+        app_state["session_had_members"] = True  # B.5: this session had a squad
 
     # Dedup: skip LLM call if tactical situation hasn't changed
     fp = _sitrep_fingerprint(sitrep)
@@ -1970,6 +2123,11 @@ async def startup_event():
     """F7: Initialize soldier memory system on startup."""
     ensure_soldier_dirs()
     cleanup_dead_soldiers()
+    # B.4: restore the previous deployment recap across bridge restarts
+    persisted = _load_last_report_summary()
+    if persisted:
+        app_state["last_report_summary"] = persisted
+        logger.info(f"[B.4] Restored last deployment recap: {persisted[:80]}...")
     print(f"[F7] Soldier memory system initialized: {SOLDIER_MEMORY_DIR}")
 
     # Phase 2 fix: wire up + start the voice pipeline (was configured but
@@ -2029,6 +2187,8 @@ async def get_soldier_memories(detail: int = 0):
                 "battles": mem.get("battles_survived", 0),
                 "kills": mem.get("kills", 0),
                 "mood": mem.get("mood", "?"),
+                "fatigue": (mem.get("fatigue") or {}).get("label", "fresh"),  # B.4
+                "fatigue_minutes": (mem.get("fatigue") or {}).get("minutes", 0),  # B.4
                 "last_thought": (mem.get("last_thought", "") or "")[:80],
                 "thought_history": len(mem.get("thought_history", [])),
                 "birth_date": mem.get("birth_date", "")[:10],

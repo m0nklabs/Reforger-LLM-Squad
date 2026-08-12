@@ -59,3 +59,6 @@ scripts/dev_loop_prompt_*.txt
 tools/
 tools/wb_*.txt
 server.json
+
+# Runtime after-action reports (B.5) + persisted deployment recap (B.4)
+python_bridge/reports/

@@ -180,6 +180,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
       <div class="stat-pill"><div class="stat-dot offline" id="dotPlayer"></div><span id="txtPlayer">Player: —</span></div>
       <div class="stat-pill"><span id="txtLLM" style="color:var(--text-muted)">LLM: —</span></div>
       <div class="stat-pill"><span id="txtSquad" style="color:var(--text-muted)">Squad: —</span></div>
+      <div class="stat-pill"><span id="txtFatigue" style="color:var(--text-muted)">Fatigue: —</span></div>
     </div>
     <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
   </header>
@@ -445,6 +446,11 @@ async function pollHealth(){
     // Squad count (from last status)
     document.getElementById('txtSquad').textContent = 'Pending: ' + data.pending_orders + ' orders';
 
+    // B.4: session fatigue pill
+    const fatigue = data.fatigue || 'fresh';
+    const sessMin = data.session_minutes !== undefined ? Math.round(data.session_minutes) + 'min' : '';
+    document.getElementById('txtFatigue').textContent = 'Fatigue: ' + (fatigue !== 'fresh' ? '🥱'+fatigue : fatigue) + (sessMin ? ' · '+sessMin : '');
+
     // Footer
     document.getElementById('fSitreps').textContent = data.sitreps_received;
     document.getElementById('fLLMCalls').textContent = data.llm_calls;
@@ -630,6 +636,7 @@ async function pollSoldiers(){
       const rank = s.rank || '';
       const role = s.role || '';
       const personality = s.personality || '';
+      const fatigue = s.fatigue || ''; // B.4: session fatigue label
       // F8.4: relationships badges (e.g. Alpha_2:trusted)
       const rels = s.relationships || {};
       const relBadges = Object.entries(rels).map(([k,v]) =>
@@ -642,6 +649,7 @@ async function pollSoldiers(){
         '<span class="r-status '+status+'">'+status+'</span>' +
         (mood ? '<span class="r-mood">'+escapeHtml(mood)+'</span>' : '') +
         (personality ? '<span class="r-personality">'+escapeHtml(personality)+'</span>' : '') +
+        (fatigue && fatigue !== 'fresh' ? '<span class="r-mood" style="color:#f1fa8c" title="session fatigue">🥱'+escapeHtml(fatigue)+'</span>' : '') +
         (kills > 0 ? '<span class="r-kills">💀'+kills+'</span>' : '') +
         (battles > 0 ? '<span class="r-kills">⚔️'+battles+'</span>' : '') +
         (relBadges ? '<div class="r-rellist">'+relBadges+'</div>' : '') +

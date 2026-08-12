@@ -21,6 +21,14 @@
     "fallback_action": "HOLD",
     "death_grace_cycles": 2
   },
+  "fatigue": {
+    "enabled": true,
+    "tired_minutes": 20,
+    "exhausted_minutes": 45,
+    "worn_minutes": 75,
+    "combat_acceleration_events": 3,
+    "contact_acceleration_events": 5
+  },
   "voice": {
     "enabled": false,
     "ptt_key": "caps lock",

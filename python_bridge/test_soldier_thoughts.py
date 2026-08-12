@@ -569,6 +569,34 @@ def test_replacement_resets_rank_and_deeds():
     bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_12.json").unlink(missing_ok=True)
 
 
+def test_session_boundary_live_flow_sequence():
+    print("test_session_boundary_live_flow_sequence")
+    # Reproduces the exact receive_sitrep order: boundary check runs BEFORE
+    # sitrep_count is incremented. First SITREP ever: count==0 -> no boundary.
+    # Second SITREP after a gap: count==1 -> boundary MUST fire.
+    (bridge.SOLDIER_MEMORY_DIR / "Kilo_18.json").unlink(missing_ok=True)
+    bridge.load_soldier_memory("Kilo_18")
+    bridge.app_state["sitrep_count"] = 0
+    bridge.app_state["last_sitrep_time"] = time.time()  # first SITREP just arrived
+    bridge.app_state["last_squad_names"] = ["Kilo_18"]
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["session_had_members"] = False
+    check("no boundary on very first sitrep", bridge._check_session_boundary() is False)
+    bridge.app_state["sitrep_count"] = 1  # receive_sitrep increments after the check
+    bridge.app_state["last_sitrep_time"] = time.time() - 200  # player left; gap grows
+    bridge.app_state["session_had_members"] = True
+    check("boundary fires on second sitrep after gap", bridge._check_session_boundary() is True)
+    check("report summary stored", bool(bridge.app_state.get("last_report_summary")))
+    # cleanup
+    for f in bridge.REPORTS_DIR.glob("report_*.json"):
+        f.unlink(missing_ok=True)
+    bridge.SOLDIER_MEMORY_DIR.joinpath("Kilo_18.json").unlink(missing_ok=True)
+    bridge.app_state["last_squad_names"] = []
+    bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["last_report_summary"] = None
+    bridge.app_state["session_had_members"] = False
+
+
 def test_after_action_report_written_on_session_end():
     print("test_after_action_report_written_on_session_end")
     import shutil
@@ -599,6 +627,7 @@ def test_after_action_report_written_on_session_end():
     bridge.app_state["missing_soldiers"] = {}
     bridge.app_state["battle_log"] = ["[00:01:00] CONTACT: 3 hostiles detected"]
     bridge.app_state["session_start_time"] = time.time() - 3600
+    bridge.app_state["session_had_members"] = True
     check("boundary detected", bridge._check_session_boundary() is True)
     check("squad state reset", bridge.app_state["last_squad_names"] == [])
     summary = bridge.app_state.get("last_report_summary") or ""
@@ -625,6 +654,7 @@ def test_after_action_report_written_on_session_end():
     bridge.app_state["last_report_summary"] = None
     bridge.app_state["last_squad_names"] = []
     bridge.app_state["missing_soldiers"] = {}
+    bridge.app_state["session_had_members"] = False
 
 
 def test_report_summary_in_prompts():
@@ -742,6 +772,7 @@ def run_tests():
     test_no_promotion_below_threshold()
     test_replacement_resets_rank_and_deeds()
     print("=== B.5 after-action report unit tests ===")
+    test_session_boundary_live_flow_sequence()
     test_after_action_report_written_on_session_end()
     test_report_summary_in_prompts()
     # cleanup test soldier
