@@ -1,5 +1,33 @@
 [
   {
+    "model": "llama3.2-3b",
+    "samples": 6,
+    "errors": 0,
+    "valid_json_rate": 1.0,
+    "thought_rate": 1.0,
+    "tool_rate": 0.167,
+    "mood_valid_rate": 1.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 0.49,
+    "cold_start_s": 0.72,
+    "avg_completion_tokens": 35.5,
+    "note": "BASELINE - fast and valid on current proxy"
+  },
+  {
+    "model": "Ministral-3-14B-Reasoning-2512",
+    "samples": 6,
+    "errors": 6,
+    "valid_json_rate": 0.0,
+    "thought_rate": 0.0,
+    "tool_rate": 0.0,
+    "mood_valid_rate": 0.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": null,
+    "cold_start_s": null,
+    "avg_completion_tokens": null,
+    "note": "FAILS TO LOAD: CUDA OOM (19456 MiB alloc fail, Q8_0 @ 262k ctx)"
+  },
+  {
     "model": "phi4",
     "samples": 1,
     "errors": 0,
@@ -11,6 +39,34 @@
     "avg_latency_s": 26.98,
     "cold_start_s": 26.98,
     "avg_completion_tokens": 600.0,
-    "samples_with_tools": []
+    "note": "UNUSABLE: reasoning chain-of-thought spills into output, never emits JSON, hits max_tokens"
+  },
+  {
+    "model": "gemma4-12b-gpu1",
+    "samples": 4,
+    "errors": 4,
+    "valid_json_rate": 0.0,
+    "thought_rate": 0.0,
+    "tool_rate": 0.0,
+    "mood_valid_rate": 0.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 255.74,
+    "cold_start_s": 361.6,
+    "avg_completion_tokens": null,
+    "note": "FAILS TO LOAD: proxy GPU1 config cannot fit params to free device memory"
+  },
+  {
+    "model": "llama3",
+    "samples": 4,
+    "errors": 0,
+    "valid_json_rate": 1.0,
+    "thought_rate": 1.0,
+    "tool_rate": 0.25,
+    "mood_valid_rate": 1.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 71.6,
+    "cold_start_s": 206.21,
+    "avg_completion_tokens": 33.8,
+    "note": "QUALITY OK but 27-72s/thought (50-150x slower than baseline) - unusable for live 2-10s SITREP cycle"
   }
 ]
