@@ -1,0 +1,17 @@
+[
+  {
+    "model": "Ministral-3-14B-Reasoning-2512",
+    "samples": 1,
+    "errors": 1,
+    "valid_json_rate": 0.0,
+    "thought_rate": 0.0,
+    "tool_rate": 0.0,
+    "mood_valid_rate": 0.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 101.73,
+    "cold_start_s": 101.73,
+    "model_load_s": null,
+    "avg_completion_tokens": null,
+    "sample_thoughts": []
+  }
+]

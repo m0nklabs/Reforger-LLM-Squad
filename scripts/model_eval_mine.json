@@ -1,0 +1,19 @@
+[
+  {
+    "model": "llama3.2-3b",
+    "samples": 2,
+    "errors": 0,
+    "valid_json_rate": 1.0,
+    "thought_rate": 1.0,
+    "tool_rate": 0.0,
+    "mood_valid_rate": 1.0,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 110.56,
+    "cold_start_s": 197.76,
+    "avg_completion_tokens": 34.5,
+    "sample_thoughts": [
+      "Three hostiles advancing on our flank, need to reposition to face them head-on.",
+      "We've been out here for 45 minutes, no sign of movement or intel. This feels too quiet."
+    ]
+  }
+]
