@@ -1,17 +1,74 @@
 [
   {
     "model": "llama3.2-3b",
-    "samples": 6,
+    "samples": 8,
+    "errors": 0,
+    "valid_json_rate": 0.875,
+    "thought_rate": 0.875,
+    "tool_rate": 0.125,
+    "mood_valid_rate": 0.875,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 21.26,
+    "cold_start_s": 33.42,
+    "model_load_s": 118.84,
+    "avg_completion_tokens": 35.2,
+    "sample_thoughts": [
+      "Possible flank, need to reposition to prevent encircling.",
+      "Been walking for hours, still no sign of anything. CO, we're good to keep moving.",
+      "Road to our left is getting congested, expect ambush at 090-110.",
+      "CO's down, we need to get him to cover, no way to flank him",
+      "3 hostiles advancing, need to secure flank, suggest wedge formation to protect our 6 o'clock.",
+      "Check the right flank, CO, looks like some disturbed foliage and a faint trail",
+      "Grid 045-122 looks like a high ground, could provide overwatch."
+    ]
+  },
+  {
+    "model": "llama3",
+    "samples": 8,
     "errors": 0,
     "valid_json_rate": 1.0,
     "thought_rate": 1.0,
-    "tool_rate": 0.167,
+    "tool_rate": 0.25,
+    "mood_valid_rate": 0.875,
+    "parrot_rate": 0.0,
+    "avg_latency_s": 0.46,
+    "cold_start_s": 0.45,
+    "model_load_s": 0.22,
+    "avg_completion_tokens": 38.4,
+    "sample_thoughts": [
+      "Hostiles in column formation, likely trying to outflank us.",
+      "Waited long enough, better be safe than sorry",
+      "Watch for flanking enemy, keep eyes on the flanking terrain",
+      "Medic needs to hurry, Alpha_3's wound is spreading.",
+      "Need to get CO to cover, can't let him get killed",
+      "Possible flanking maneuver, need to secure our 3 o'clock",
+      "Nothing's moving, just the wind rustling through the trees.",
+      "Grid 045-122 is 500m north, 300m east of our last position, should be an easy push"
+    ]
+  },
+  {
+    "model": "laguna-s-2.1",
+    "samples": 8,
+    "errors": 0,
+    "valid_json_rate": 1.0,
+    "thought_rate": 1.0,
+    "tool_rate": 0.5,
     "mood_valid_rate": 1.0,
     "parrot_rate": 0.0,
-    "avg_latency_s": 0.49,
-    "cold_start_s": 0.72,
-    "avg_completion_tokens": 35.5,
-    "note": "BASELINE - fast and valid on current proxy"
+    "avg_latency_s": 211.76,
+    "cold_start_s": 364.01,
+    "model_load_s": 161.22,
+    "avg_completion_tokens": 48.5,
+    "sample_thoughts": [
+      "Three targets at 200, moving our way. CO, we need to break that advance before they close to effective range.",
+      "Copy that, Alpha_3. Keeping it tight along the treeline.",
+      "Copy that, CO. Moving to grid 045-122 in Wedge. Watch my sectors.",
+      "CO, Alpha_3's down—need to know if we're pushing or pulling back. Waiting on your call, sir.",
+      "CO's down—need immediate smoke cover and a medic on the double!",
+      "CO, three contacts bearing east, 200 meters, advancing. Recommend we shift to line formation and engage before they close.",
+      "Copy that, Alpha_3. Same sector, no movement. Keeping low profile along the treeline.",
+      "Roger that, CO. Moving to grid 045-122 in Wedge formation. Keeping spacing tight."
+    ]
   },
   {
     "model": "Ministral-3-14B-Reasoning-2512",
@@ -54,19 +111,5 @@
     "cold_start_s": 361.6,
     "avg_completion_tokens": null,
     "note": "FAILS TO LOAD: proxy GPU1 config cannot fit params to free device memory"
-  },
-  {
-    "model": "llama3",
-    "samples": 4,
-    "errors": 0,
-    "valid_json_rate": 1.0,
-    "thought_rate": 1.0,
-    "tool_rate": 0.25,
-    "mood_valid_rate": 1.0,
-    "parrot_rate": 0.0,
-    "avg_latency_s": 71.6,
-    "cold_start_s": 206.21,
-    "avg_completion_tokens": 33.8,
-    "note": "QUALITY OK but 27-72s/thought (50-150x slower than baseline) - unusable for live 2-10s SITREP cycle"
   }
 ]

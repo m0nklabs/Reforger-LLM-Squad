@@ -92,6 +92,23 @@ def evaluate_model(client, model: str, samples: int, max_tokens: int) -> dict:
     errors = 0
     sample_thoughts = []
 
+    # Warm-up call: the model cold-loads on the proxy here (can take minutes),
+    # so measured samples reflect steady-state latency. Reported as load_s.
+    load_s = None
+    try:
+        t0 = time.time()
+        client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+            temperature=0.0,
+        )
+        load_s = round(time.time() - t0, 2)
+        print(f"   warm-up done ({load_s}s)")
+    except Exception as e:  # noqa: BLE001 - report any proxy failure
+        load_s = None
+        print(f"   [WARN] warm-up failed: {type(e).__name__}: {e}")
+
     for i in range(samples):
         situation, _tag = SITUATIONS[i % len(SITUATIONS)]
         messages = build_prompt(situation)
@@ -146,6 +163,7 @@ def evaluate_model(client, model: str, samples: int, max_tokens: int) -> dict:
         "parrot_rate": round(parrots / n, 3),
         "avg_latency_s": round(sum(latencies) / max(1, len(latencies)), 2),
         "cold_start_s": round(latencies[0], 2) if latencies else None,
+        "model_load_s": load_s,
         "avg_completion_tokens": round(sum(completion_tokens) / max(1, len(completion_tokens)), 1) if completion_tokens else None,
         "sample_thoughts": [t for t in sample_thoughts if t],
     }
@@ -171,7 +189,7 @@ def main():
     client = bridge.OpenAI(
         base_url=bridge.CONFIG["llm"]["base_url"],
         api_key=bridge.CONFIG["llm"]["api_key"],
-        timeout=120.0,  # cold model load can be slow
+        timeout=600.0,  # cold model load on the proxy can take minutes
     )
 
     # Rule 41: ASCII only in console output (cp1252 crashes on unicode)
@@ -188,12 +206,12 @@ def main():
               f"cold={r['cold_start_s']}s  tokens={r['avg_completion_tokens']}\n")
 
     print("-- Summary --")
-    header = f"{'model':<32}{'valid':>7}{'thought':>9}{'tool':>7}{'mood':>7}{'parrot':>8}{'avg_s':>8}{'cold_s':>8}"
+    header = f"{'model':<32}{'valid':>7}{'thought':>9}{'tool':>7}{'mood':>7}{'parrot':>8}{'avg_s':>8}{'load_s':>8}"
     print(header)
     for r in results:
         print(f"{r['model']:<32}{r['valid_json_rate']:>7}{r['thought_rate']:>9}"
               f"{r['tool_rate']:>7}{r['mood_valid_rate']:>7}{r['parrot_rate']:>8}"
-              f"{r['avg_latency_s']:>8}{str(r['cold_start_s']):>8}")
+              f"{r['avg_latency_s']:>8}{str(r['model_load_s']):>8}")
 
     out_path = Path(args.out)
     out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
