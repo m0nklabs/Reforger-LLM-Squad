@@ -697,13 +697,13 @@ class LLMBridge
 		if (action == "HOLD")
 		{
 			SetAllOrders("HOLD");
-			// BUGFIX: the LLM adjutant must NOT clear waypoints the CO placed via
-			// /orders (dashboard/voice) — the squad would stop mid-move every 30s
-			// SITREP cycle. Only LLM-placed waypoints are cleared.
-			if (!HasUserWaypoint())
-				ClearSquadWaypoints();
-			else
-				Print("[LLMBridge] HOLD from LLM — keeping CO waypoint active");
+			// BUGFIX (2nd round): the LLM adjutant NEVER clears waypoints on HOLD.
+			// Round 1 guarded only m_aWaypoints entries, but auto-follow waypoints
+			// (RESPAWN path) and vanilla in-game commanding waypoints are added
+			// DIRECTLY on the group — they are invisible to HasUserWaypoint() and
+			// got wiped every 30s SITREP cycle, stopping the squad mid-move.
+			// Only an explicit CO "hold" via /orders clears waypoints (CO wins).
+			Print("[LLMBridge] HOLD from LLM — keeping waypoints active");
 		}
 		else if (action == "MOVE" || action == "ATTACK" || action == "FLANK" || action == "ENGAGE" || action == "SUPPRESS" || action == "RETREAT")
 		{
