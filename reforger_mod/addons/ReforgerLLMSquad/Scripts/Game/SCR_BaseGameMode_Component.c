@@ -39,6 +39,16 @@ modded class SCR_BaseGameMode
     //------------------------------------------------------------------------------------------------
     override void OnGameStart()
     {
+        // CRITICAL: the bridge client (LLMBridge/Stavka/thoughts/orders) must run
+        // ONLY on the dedicated server. Without this guard the game CLIENT also
+        // starts LLMBridge, polls /orders and /ai_thought against the same bridge,
+        // steals orders from the DS ("No AI group found") and sends duplicate SITREPs.
+        if (!Replication.IsServer())
+        {
+            Print("[LLMGameMode] Client — bridge client disabled (DS-only mod)");
+            return;
+        }
+
         Print("[LLMGameMode] OnGameStart - Initializing LLM Bridge");
         if (m_bLLMInitialized)
             return;
