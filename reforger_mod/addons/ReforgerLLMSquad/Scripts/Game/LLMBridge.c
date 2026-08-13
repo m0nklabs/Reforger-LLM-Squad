@@ -29,6 +29,7 @@ class LLMWaypoint
 	string m_sType;
 	bool m_bExecuted;
 	float m_fSpawnTime;
+	bool m_bUserOrder;   // true = placed by CO via /orders (dashboard/voice) — LLM HOLD must NOT clear these
 
 	void LLMWaypoint(string sID, vector vPos, string sType)
 	{
@@ -37,6 +38,7 @@ class LLMWaypoint
 		m_sType = sType;
 		m_bExecuted = false;
 		m_fSpawnTime = 0.0;
+		m_bUserOrder = false;
 	}
 }
 
@@ -536,7 +538,7 @@ class LLMBridge
 				targetPos[0] = squadPos[0] + offset[0];
 				targetPos[2] = squadPos[2] + offset[2];
 				Print("[LLMBridge] " + moveAction + ": squad=" + squadPos + " + offset=" + offset + " = " + targetPos);
-				ExecuteWaypoint(moveAction, targetPos);
+				ExecuteWaypoint(moveAction, targetPos, true);  // CO order — LLM HOLD must not clear
 			}
 			else
 			{
@@ -597,7 +599,7 @@ class LLMBridge
 			// Create a Follow waypoint at the leader's position
 			vector leaderPos = GetSquadPosition();
 			Print("[LLMBridge] FOLLOW: creating follow waypoint at " + leaderPos);
-			ExecuteWaypoint("FOLLOW", leaderPos);
+			ExecuteWaypoint("FOLLOW", leaderPos, true);  // CO order
 		}
 		else if (cmd == "medic")
 		{
@@ -606,7 +608,7 @@ class LLMBridge
 			SetAllOrders("MEDIC");
 			vector medicPos = GetSquadPosition();
 			Print("[LLMBridge] MEDIC: soldier tool triggered rescue at " + medicPos);
-			ExecuteWaypoint("FOLLOW", medicPos);
+			ExecuteWaypoint("FOLLOW", medicPos, true);  // CO order
 		}
 		else if (cmd == "mount")
 		{
@@ -695,7 +697,13 @@ class LLMBridge
 		if (action == "HOLD")
 		{
 			SetAllOrders("HOLD");
-			ClearSquadWaypoints();
+			// BUGFIX: the LLM adjutant must NOT clear waypoints the CO placed via
+			// /orders (dashboard/voice) — the squad would stop mid-move every 30s
+			// SITREP cycle. Only LLM-placed waypoints are cleared.
+			if (!HasUserWaypoint())
+				ClearSquadWaypoints();
+			else
+				Print("[LLMBridge] HOLD from LLM — keeping CO waypoint active");
 		}
 		else if (action == "MOVE" || action == "ATTACK" || action == "FLANK" || action == "ENGAGE" || action == "SUPPRESS" || action == "RETREAT")
 		{
@@ -875,7 +883,21 @@ class LLMBridge
 	}
 
 	//------------------------------------------------------------------------------------------------
-	void ExecuteWaypoint(string sAction, vector vPos)
+	// Returns true if the CO (user) placed an active waypoint via /orders
+	// (dashboard/voice). The LLM adjutant's HOLD must NOT clear these —
+	// the CO outranks the adjutant.
+	bool HasUserWaypoint()
+	{
+		for (int i = 0; i < m_aWaypoints.Count(); i++)
+		{
+			if (m_aWaypoints[i].m_bUserOrder)
+				return true;
+		}
+		return false;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void ExecuteWaypoint(string sAction, vector vPos, bool bUserOrder = false)
 	{
 		SCR_AIGroup grp = FindAIGroup();
 		if (!grp) { Print("[LLMBridge] No AI group found (slave or master)"); return; }
@@ -905,6 +927,7 @@ class LLMBridge
 		string sID = "WP_" + sAction + "_" + m_aWaypoints.Count();
 		LLMWaypoint lwp = new LLMWaypoint(sID, vPos, sAction);
 		lwp.m_fSpawnTime = m_fTime;
+		lwp.m_bUserOrder = bUserOrder;
 		m_aWaypoints.Insert(lwp);
 	}
 
